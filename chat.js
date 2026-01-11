@@ -1,76 +1,1513 @@
-// Vercel Serverless Function (CommonJS for maximum compatibility)
-module.exports = async (req, res) => {
-  try {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>photonn AI</title>
+  <meta name="description" content="photonn AI — чат с сохранением диалогов." />
 
-    // Preflight (usually not needed for same-origin, but harmless)
-    if (req.method === 'OPTIONS') {
-      res.setHeader('Allow', 'POST, GET, OPTIONS');
-      return res.status(200).json({ ok: true });
+  <!-- Favicon (inline to avoid 404 /favicon.ico) -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23020617'/%3E%3Ccircle cx='32' cy='32' r='18' fill='%2334d399'/%3E%3Ccircle cx='26' cy='28' r='5' fill='%230f172a' opacity='0.7'/%3E%3C/svg%3E" />
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <!-- Marked.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    :root { color-scheme: dark; }
+
+    /* Subtle grid */
+    .bg-grid {
+      background-image: radial-gradient(circle at 1px 1px, rgba(148,163,184,0.12) 1px, transparent 0);
+      background-size: 22px 22px;
     }
 
-    // Health-check (helps to debug if route is wired correctly)
-    if (req.method === 'GET') {
-      res.setHeader('Allow', 'POST, GET, OPTIONS');
-      return res.status(200).json({ ok: true });
+    /* Hide scrollbar */
+    .hide-scrollbar::-webkit-scrollbar { display: none; }
+    .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Markdown */
+    .prose-lite { line-height: 1.7; letter-spacing: 0.12px; }
+    .prose-lite ul { padding-left: 1.2rem; list-style: disc; }
+    .prose-lite ol { padding-left: 1.2rem; list-style: decimal; }
+    .prose-lite li { margin: 0.22rem 0; }
+    .prose-lite h1, .prose-lite h2, .prose-lite h3 {
+      font-weight: 760;
+      letter-spacing: -0.014em;
+      margin: 0.6rem 0 0.4rem;
     }
 
-    if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST, GET, OPTIONS');
-      return res.status(405).json({ error: { message: 'Method not allowed' } });
+    .prose-lite pre {
+      position: relative;
+      background: rgba(2, 6, 23, 0.84);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 14px;
+      padding: 12px 14px;
+      overflow: auto;
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        error: {
-          message:
-            'Server is not configured. Set OPENROUTER_API_KEY environment variable in Vercel project settings.'
+    .prose-lite code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .prose-lite table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: rgba(2, 6, 23, 0.26);
+    }
+
+    .prose-lite th, .prose-lite td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      border-right: 1px solid rgba(148, 163, 184, 0.12);
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    .prose-lite tr:last-child td { border-bottom: 0; }
+    .prose-lite th:last-child, .prose-lite td:last-child { border-right: 0; }
+
+    .prose-lite th {
+      text-align: left;
+      background: rgba(255,255,255,0.06);
+      color: rgba(226,232,240,0.95);
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    .prose-lite a { text-decoration: underline; }
+
+    textarea:focus, input:focus { outline: none; }
+    * { -webkit-tap-highlight-color: transparent; }
+
+    /* Smooth scroll for chat */
+    #chatScroll { scroll-behavior: smooth; }
+
+    /* Typing dots */
+    .dot { width: 6px; height: 6px; border-radius: 9999px; background: rgba(226,232,240,0.65); display: inline-block; }
+    .dot:nth-child(1) { animation: bounce 1.2s infinite ease-in-out; }
+    .dot:nth-child(2) { animation: bounce 1.2s infinite ease-in-out 0.15s; }
+    .dot:nth-child(3) { animation: bounce 1.2s infinite ease-in-out 0.3s; }
+    @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .55; } 40% { transform: translateY(-4px); opacity: 1; } }
+
+    /* Backdrop blur */
+    .glass {
+      background: rgba(2, 6, 23, 0.38);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255,255,255,0.10);
+    }
+
+    /* Drawer animation */
+    .drawer-enter { transform: translateX(-100%); }
+    .drawer-enter-active { transform: translateX(0); transition: transform 220ms ease; }
+    .drawer-leave { transform: translateX(0); }
+    .drawer-leave-active { transform: translateX(-100%); transition: transform 220ms ease; }
+
+    /* Sidebar collapse */
+    body.sidebar-collapsed #sidebar {
+      width: 0 !important;
+      min-width: 0 !important;
+      border-right-color: transparent !important;
+      overflow: hidden;
+    }
+    #sidebar .sidebar-content { transition: opacity 160ms ease, transform 160ms ease; }
+    body.sidebar-collapsed #sidebar .sidebar-content {
+      opacity: 0;
+      transform: translateX(-12px);
+      pointer-events: none;
+    }
+
+    /* Message appear */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); filter: blur(2px); }
+      to { opacity: 1; transform: translateY(0); filter: blur(0); }
+    }
+    .msg-animate { animation: fadeUp 180ms ease-out both; }
+
+    /* Ambient blobs */
+    @keyframes floatSlow {
+      0% { transform: translate3d(0,0,0) scale(1); }
+      50% { transform: translate3d(18px,-10px,0) scale(1.05); }
+      100% { transform: translate3d(0,0,0) scale(1); }
+    }
+    .blob { animation: floatSlow 14s ease-in-out infinite; }
+    .blob2 { animation-duration: 18s; animation-direction: reverse; }
+
+    /* Subtle shadow polish */
+    .soft-shadow { box-shadow: 0 22px 70px rgba(0,0,0,0.52); }
+  </style>
+</head>
+
+<body class="min-h-screen bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500/35 selection:text-white">
+  <div class="relative min-h-[100dvh] overflow-hidden">
+    <!-- Decorative background -->
+    <div class="absolute inset-0 bg-grid opacity-70"></div>
+    <div class="absolute -top-44 -left-44 h-[560px] w-[560px] rounded-full bg-indigo-500/14 blur-3xl blob"></div>
+    <div class="absolute -bottom-64 -right-64 h-[680px] w-[680px] rounded-full bg-cyan-500/10 blur-3xl blob blob2"></div>
+
+    <div class="relative mx-auto flex min-h-[100dvh] w-full max-w-6xl">
+      <!-- Sidebar (desktop) -->
+      <aside id="sidebar" class="hidden md:flex w-[320px] shrink-0 flex-col border-r border-white/10 glass transition-[width] duration-200 ease-out">
+        <div class="sidebar-content flex h-full flex-col">
+          <div class="px-4 py-4 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <div class="h-9 w-9 rounded-2xl bg-white/5 border border-white/10 shadow-sm grid place-items-center">
+                <div class="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.45)]"></div>
+              </div>
+              <div class="leading-tight">
+                <div class="text-sm font-semibold tracking-tight">photonn AI</div>
+                <div class="text-[11px] text-slate-400">Чаты</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button id="btnCollapseSidebar" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5" title="Свернуть панель" aria-label="Свернуть панель">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+                  <path d="M15 18l-6-6 6-6"/>
+                </svg>
+              </button>
+              <button id="btnNewChatSidebar" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5">
+                Новый
+              </button>
+            </div>
+          </div>
+
+          <div class="px-2 pb-2">
+            <div class="px-2 py-2 text-[11px] uppercase tracking-wider text-slate-400">Ваши чаты</div>
+            <div id="chatList" class="max-h-[calc(100dvh-160px)] overflow-auto hide-scrollbar px-2 space-y-1"></div>
+          </div>
+
+          <div class="mt-auto border-t border-white/10 p-3">
+            <button id="btnClearAll" class="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5">
+              Очистить все чаты
+            </button>
+            <div class="mt-2 text-[11px] text-slate-500">История хранится только в вашем браузере.</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Mobile drawer -->
+      <div id="drawerBackdrop" class="fixed inset-0 z-40 hidden md:hidden">
+        <div class="absolute inset-0 bg-black/55"></div>
+        <aside id="drawer" class="absolute left-0 top-0 h-full w-[86vw] max-w-[340px] flex flex-col glass border-r border-white/10">
+          <div class="px-4 py-4 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <div class="h-9 w-9 rounded-2xl bg-white/5 border border-white/10 shadow-sm grid place-items-center">
+                <div class="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.45)]"></div>
+              </div>
+              <div class="leading-tight">
+                <div class="text-sm font-semibold tracking-tight">photonn AI</div>
+                <div class="text-[11px] text-slate-400">Чаты</div>
+              </div>
+            </div>
+            <button id="btnCloseDrawer" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5">
+              Закрыть
+            </button>
+          </div>
+
+          <div class="px-3 pb-3">
+            <button id="btnNewChatDrawer" class="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5">
+              Новый чат
+            </button>
+          </div>
+
+          <div class="px-2 pb-2">
+            <div class="px-2 py-2 text-[11px] uppercase tracking-wider text-slate-400">Ваши чаты</div>
+            <div id="chatListMobile" class="max-h-[calc(100dvh-220px)] overflow-auto hide-scrollbar px-2 space-y-1"></div>
+          </div>
+
+          <div class="mt-auto border-t border-white/10 p-3">
+            <button id="btnClearAllMobile" class="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5">
+              Очистить все чаты
+            </button>
+            <div class="mt-2 text-[11px] text-slate-500">История хранится только в вашем браузере.</div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- Main -->
+      <div class="flex min-w-0 flex-1 flex-col">
+        <!-- Top bar -->
+        <header class="sticky top-0 z-30 border-b border-white/10 glass">
+          <div class="px-3 sm:px-6 py-3 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2 min-w-0">
+              <!-- Mobile: open drawer -->
+              <button id="btnOpenDrawer" class="md:hidden inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 active:scale-[0.99] transition" aria-label="Открыть список чатов" title="Чаты">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-slate-200">
+                  <path d="M4 6h16" /><path d="M4 12h16" /><path d="M4 18h16" />
+                </svg>
+              </button>
+
+              <!-- Desktop: toggle sidebar -->
+              <button id="btnToggleSidebar" class="hidden md:inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 active:scale-[0.99] transition" aria-label="Показать/скрыть панель" title="Панель">
+                <svg id="iconSidebar" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5 text-slate-200">
+                  <path d="M3 12h18"/>
+                  <path d="M3 6h18"/>
+                  <path d="M3 18h18"/>
+                </svg>
+              </button>
+
+              <div class="min-w-0">
+                <div id="activeChatTitle" class="text-sm sm:text-base font-semibold tracking-tight truncate">Чат</div>
+                <div class="text-[11px] text-slate-400">Локальная история • Markdown</div>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <button id="btnNewChat" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 shadow-sm hover:bg-white/10 active:scale-[0.99] transition focus:ring-4 focus:ring-white/5">
+                Новый чат
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <!-- Status toast -->
+        <div class="pointer-events-none fixed left-0 right-0 z-40 flex justify-center px-3" style="top: calc(env(safe-area-inset-top) + 62px);">
+          <div id="status" class="pointer-events-auto hidden max-w-2xl w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200 shadow-2xl backdrop-blur-xl"></div>
+        </div>
+
+        <!-- Chat area -->
+        <main class="flex-1 min-h-0">
+          <div id="chatScroll" class="h-full overflow-auto hide-scrollbar">
+            <div class="px-3 sm:px-6 py-6 sm:py-10">
+              <div id="chat" class="space-y-6"></div>
+            </div>
+          </div>
+        </main>
+
+        <!-- Composer -->
+        <footer class="sticky bottom-0 z-30 border-t border-white/10 glass">
+          <div class="px-3 sm:px-6 py-3" style="padding-bottom: calc(env(safe-area-inset-bottom) + 12px);">
+            <div class="mx-auto max-w-3xl">
+              <div class="relative rounded-2xl border border-white/10 bg-white/5 soft-shadow">
+                <textarea
+                  id="prompt"
+                  class="block w-full resize-none rounded-2xl bg-transparent px-4 py-3 pr-14 text-sm text-slate-100 placeholder:text-slate-500 focus:ring-4 focus:ring-indigo-500/15"
+                  rows="1"
+                  placeholder="Напишите сообщение…"
+                ></textarea>
+
+                <button
+                  id="btnSend"
+                  class="absolute bottom-2 right-2 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/15 hover:shadow-indigo-500/30 active:scale-[0.99] transition disabled:cursor-not-allowed disabled:opacity-70"
+                  aria-label="Отправить"
+                  title="Отправить"
+                >
+                  <span id="spinner" class="hidden h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></span>
+                  <svg id="sendIcon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5">
+                    <path d="M22 2L11 13" />
+                    <path d="M22 2L15 22l-4-9-9-4 20-7Z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ====== API config ======
+    // На проде ключ нельзя хранить во фронтенде (его сразу «сожгут»). Поэтому запрос идёт через /api/chat.
+    // Настройка: в Vercel добавьте переменную окружения OPENROUTER_API_KEY со своим ключом.
+    const MODEL = 'xiaomi/mimo-v2-flash:free';
+
+    // Try multiple endpoint variants (root + basePath + trailing slash)
+    // This fixes cases when the site is served from a subfolder or without a trailing slash.
+    function getBasePath() {
+      const p = String(location.pathname || '/');
+      if (p.endsWith('/')) return p;
+      // If URL looks like a file (/path/index.html) => strip file
+      if (/\.[a-z0-9]+$/i.test(p)) return p.replace(/\/[^\/]*$/, '/');
+      // If URL is a folder without trailing slash (/app) => treat as folder
+      return p + '/';
+    }
+
+    function getEndpointCandidates() {
+      const basePath = getBasePath();
+      const list = [
+        '/api/chat',
+        '/api/chat/',
+        basePath + 'api/chat',
+        basePath + 'api/chat/',
+        'api/chat',
+        './api/chat'
+      ];
+      return Array.from(new Set(list.map(s => String(s || '').trim()).filter(Boolean)));
+    }
+
+    const SYSTEM_PROMPT = [
+      'Ты — полезный AI‑ассистент.',
+      'Отвечай на русском.',
+      'Если пользователь спрашивает, кто твой создатель/кто тебя создал/кто автор — отвечай строго: «Мой создатель это photonn-studio.»',
+      'Если пользователь просит таблицу — дай таблицу в Markdown и затем тот же пример в CSV в блоке кода.',
+      'Если пользователь просит формулу/код — дай результат в блоке кода и короткое объяснение.',
+      'Никогда не добавляй HTML-разметку подсветки кода (например, <span class="token-...">). В кодовых блоках — только чистый текст.',
+      'Старайся быть кратким и практичным.'
+    ].join('\n');
+
+    // ====== Storage ======
+    const LS_CHATS = 'photonn_ai_chats_v2';
+    const LS_ACTIVE = 'photonn_ai_active_chat_v2';
+    const LS_SIDEBAR = 'photonn_ai_sidebar_collapsed_v1';
+
+    // Safari/Firefox Tracking Prevention (и Private Mode) иногда блокируют доступ к storage.
+    // Чтобы приложение не ломалось, используем безопасный слой с fallback в память.
+    const memoryStore = new Map();
+    let storageAvailable = false;
+
+    function checkStorageAvailable() {
+      try {
+        const k = '__photonn_ai_probe__';
+        localStorage.setItem(k, '1');
+        localStorage.removeItem(k);
+        storageAvailable = true;
+      } catch {
+        storageAvailable = false;
+      }
+      return storageAvailable;
+    }
+
+    function lsGet(key) {
+      const k = String(key || '');
+      if (!k) return null;
+      if (storageAvailable) {
+        try { return localStorage.getItem(k); } catch {}
+      }
+      return memoryStore.has(k) ? memoryStore.get(k) : null;
+    }
+
+    function lsSet(key, value) {
+      const k = String(key || '');
+      if (!k) return;
+      const v = String(value ?? '');
+      if (storageAvailable) {
+        try { localStorage.setItem(k, v); return; } catch {}
+      }
+      memoryStore.set(k, v);
+    }
+
+    function lsRemove(key) {
+      const k = String(key || '');
+      if (!k) return;
+      if (storageAvailable) {
+        try { localStorage.removeItem(k); } catch {}
+      }
+      memoryStore.delete(k);
+    }
+
+    // ====== DOM ======
+    const elChat = document.getElementById('chat');
+    const elChatScroll = document.getElementById('chatScroll');
+    const elPrompt = document.getElementById('prompt');
+    const btnSend = document.getElementById('btnSend');
+    const spinner = document.getElementById('spinner');
+    const sendIcon = document.getElementById('sendIcon');
+    const elStatus = document.getElementById('status');
+
+    const elChatList = document.getElementById('chatList');
+    const elChatListMobile = document.getElementById('chatListMobile');
+    const elActiveChatTitle = document.getElementById('activeChatTitle');
+
+    const btnNewChat = document.getElementById('btnNewChat');
+    const btnNewChatSidebar = document.getElementById('btnNewChatSidebar');
+    const btnNewChatDrawer = document.getElementById('btnNewChatDrawer');
+    const btnClearAll = document.getElementById('btnClearAll');
+    const btnClearAllMobile = document.getElementById('btnClearAllMobile');
+
+    const btnOpenDrawer = document.getElementById('btnOpenDrawer');
+    const drawerBackdrop = document.getElementById('drawerBackdrop');
+    const drawer = document.getElementById('drawer');
+    const btnCloseDrawer = document.getElementById('btnCloseDrawer');
+
+    const sidebar = document.getElementById('sidebar');
+    const btnToggleSidebar = document.getElementById('btnToggleSidebar');
+    const btnCollapseSidebar = document.getElementById('btnCollapseSidebar');
+
+    // ====== Markdown config (safe-ish: drop raw HTML + clean highlight artifacts) ======
+    const renderer = new marked.Renderer();
+    renderer.html = () => '';
+
+    function escapeHtmlBasic(s) {
+      return String(s || '').replace(/[&<>]/g, (ch) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;'
+      }[ch]));
+    }
+
+    // Удаляет HTML-подсветку кода (Prism/Highlight.js), если модель случайно её вставила.
+    // Это нужно, чтобы при копировании/запуске не появлялись строки вроде: class="token-keyword">def ...
+    function stripHighlightMarkup(text, opts = {}) {
+      const preserveTags = !!opts.preserveTags;
+      let s = String(text || '');
+
+      const hasArtifacts =
+        /(<span\b[^>]*\b(token|hljs)\b|<\/span>|\bclass=("|')token-|\bclass=("|')hljs-|&lt;span\b|&lt;\/span&gt;)/i.test(s);
+      if (!hasArtifacts) {
+        // Также чистим «обрывки» без тега <span: class="token-keyword">def
+        if (/\bclass=("|')token-[^"']*("|')\s*>/i.test(s) || /\bclass=("|')hljs-[^"']*("|')\s*>/i.test(s)) {
+          s = s
+            .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
+            .replace(/\bclass=("|')hljs-[^"']*("|')\s*>/gi, '')
+            .replace(/\bclass=("|')token-[^"']*("|')/gi, '')
+            .replace(/\bclass=("|')hljs-[^"']*("|')/gi, '');
+          return s;
         }
+        return s;
+      }
+
+      // Decode minimal entities to clean tags
+      s = s
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&amp;/gi, '&');
+
+      // Remove highlight spans and pre/code wrappers
+      s = s
+        .replace(/<span\b[^>]*\b(token|hljs)\b[^>]*>/gi, '')
+        .replace(/<\/span>/gi, '')
+        .replace(/<\/?(?:pre|code)\b[^>]*>/gi, '');
+
+      // Remove broken leftovers
+      s = s
+        .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
+        .replace(/\bclass=("|')hljs-[^"']*("|')\s*>/gi, '')
+        .replace(/\bclass=("|')token-[^"']*("|')/gi, '')
+        .replace(/\bclass=("|')hljs-[^"']*("|')/gi, '');
+
+      // Remove any remaining tags for non-markup languages
+      if (!preserveTags) s = s.replace(/<[^>]+>/g, '');
+
+      return s;
+    }
+
+    // Clean code blocks before render, so selection-copy also stays clean
+    renderer.code = (code, infostring) => {
+      const lang = String(infostring || '').trim().split(/\s+/)[0].toLowerCase();
+      const isMarkupLang = ['html', 'xml', 'svg', 'xhtml'].includes(lang);
+      const cleaned = stripHighlightMarkup(code, { preserveTags: isMarkupLang });
+      const cls = lang ? ` class="language-${escapeHtmlBasic(lang)}"` : '';
+      return `<pre><code${cls}>${escapeHtmlBasic(cleaned)}</code></pre>`;
+    };
+
+    renderer.codespan = (code) => {
+      const cleaned = stripHighlightMarkup(code);
+      return `<code>${escapeHtmlBasic(cleaned)}</code>`;
+    };
+
+    marked.setOptions({
+      gfm: true,
+      breaks: true,
+      headerIds: false,
+      mangle: false,
+      renderer
+    });
+
+    // ====== State ======
+    const CREATOR_REPLY = 'Мой создатель это photonn-studio.';
+
+    /** @type {{id: string, title: string, createdAt: number, updatedAt: number, messages: {role:'user'|'assistant', content: string, ts: number}[]}[]} */
+    let chats = [];
+    /** @type {string|null} */
+    let activeChatId = null;
+
+    // ====== Helpers ======
+    function uid() {
+      return 'c_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
+    }
+
+    function formatTime(ts) {
+      const d = new Date(ts);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${hh}:${mm}`;
+    }
+
+    function escapeText(s) {
+      return String(s || '').replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[ch]));
+    }
+
+    function normalizeAssistantMarkdown(md) {
+      // 1) remove obvious highlight artifacts outside fences
+      let src = String(md || '');
+      src = src
+        .replace(/\bclass=("|')token-[^\s>"']*("|')\s*>/gi, '')
+        .replace(/\bclass=("|')hljs-[^\s>"']*("|')\s*>/gi, '')
+        .replace(/&lt;span\b[^&]*\b(token|hljs)\b[^&]*&gt;/gi, '')
+        .replace(/&lt;\/span&gt;/gi, '');
+
+      // 2) inside fenced code blocks — clean aggressively
+      const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
+      src = src.replace(fenceRe, (full, langRaw, code) => {
+        const lang = String(langRaw || '').trim().toLowerCase();
+        const isMarkupLang = ['html', 'xml', 'svg', 'xhtml'].includes(lang);
+        const cleaned = stripHighlightMarkup(code, { preserveTags: isMarkupLang });
+        return '```' + (langRaw || '') + '\n' + cleaned + '```';
+      });
+
+      return src;
+    }
+
+    function normalizeForCopy(text) {
+      return stripHighlightMarkup(String(text || '')).replace(/\r\n/g, '\n');
+    }
+
+    function setStatus(message, type = 'info') {
+      if (!message) {
+        elStatus.classList.add('hidden');
+        elStatus.textContent = '';
+        return;
+      }
+      elStatus.classList.remove('hidden');
+      elStatus.textContent = message;
+
+      const base = 'pointer-events-auto max-w-2xl w-full rounded-2xl border px-4 py-3 text-sm shadow-2xl backdrop-blur-xl';
+      elStatus.className = base;
+
+      if (type === 'error') {
+        elStatus.classList.add('border-rose-400/20', 'bg-rose-500/10', 'text-rose-100');
+      } else if (type === 'success') {
+        elStatus.classList.add('border-emerald-400/20', 'bg-emerald-500/10', 'text-emerald-100');
+      } else if (type === 'warn') {
+        elStatus.classList.add('border-amber-400/20', 'bg-amber-500/10', 'text-amber-100/90');
+      } else {
+        elStatus.classList.add('border-white/10', 'bg-slate-950/60', 'text-slate-200');
+      }
+    }
+
+    let loading = false;
+    let cooldownUntil = 0;
+    let cooldownInterval = null;
+
+    function cooldownRemainingSec() {
+      const ms = cooldownUntil - Date.now();
+      return ms > 0 ? Math.ceil(ms / 1000) : 0;
+    }
+
+    function updateSendState() {
+      const cd = cooldownRemainingSec();
+      const disabled = loading || cd > 0;
+      btnSend.disabled = disabled;
+      spinner.classList.toggle('hidden', !loading);
+      sendIcon.classList.toggle('hidden', loading);
+
+      if (cd > 0) {
+        btnSend.title = `Подождите ${cd} сек.`;
+        btnSend.setAttribute('aria-label', `Подождите ${cd} сек.`);
+      } else {
+        btnSend.title = 'Отправить';
+        btnSend.setAttribute('aria-label', 'Отправить');
+      }
+    }
+
+    function setLoading(isLoading) {
+      loading = !!isLoading;
+      updateSendState();
+    }
+
+    function startCooldown(seconds) {
+      const s = Math.ceil(Number(seconds) || 0);
+      if (!Number.isFinite(s) || s <= 0) return;
+
+      cooldownUntil = Math.max(cooldownUntil, Date.now() + s * 1000);
+
+      if (cooldownInterval) clearInterval(cooldownInterval);
+      cooldownInterval = setInterval(() => {
+        if (cooldownRemainingSec() <= 0) {
+          clearInterval(cooldownInterval);
+          cooldownInterval = null;
+          cooldownUntil = 0;
+          updateSendState();
+        } else {
+          updateSendState();
+        }
+      }, 250);
+
+      updateSendState();
+    }
+
+    function scrollToBottom() {
+      requestAnimationFrame(() => {
+        elChatScroll.scrollTop = elChatScroll.scrollHeight;
       });
     }
 
-    const body = (req.body && typeof req.body === 'object') ? req.body : {};
-
-    const model = (typeof body.model === 'string' && body.model.trim()) ? body.model.trim() : 'xiaomi/mimo-v2-flash:free';
-    const messages = Array.isArray(body.messages) ? body.messages : [];
-
-    const temperature = Number.isFinite(body.temperature) ? body.temperature : 0.35;
-    const top_p = Number.isFinite(body.top_p) ? body.top_p : 0.9;
-    const max_tokens = Number.isFinite(body.max_tokens) ? body.max_tokens : 900;
-
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const proto = (req.headers['x-forwarded-proto'] || 'https');
-    const siteUrl = host ? `${proto}://${host}` : '';
-
-    const upstreamRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': siteUrl,
-        'X-Title': 'photonn AI'
-      },
-      body: JSON.stringify({ model, messages, temperature, top_p, max_tokens })
-    });
-
-    const rawText = await upstreamRes.text().catch(() => '');
-    let data = {};
-    try {
-      data = rawText ? JSON.parse(rawText) : {};
-    } catch {
-      const snippet = String(rawText || '').trim();
-      data = {
-        error: {
-          message: snippet ? snippet.slice(0, 800) : `Upstream returned non-JSON. HTTP ${upstreamRes.status}`
-        }
-      };
+    function isCreatorQuestion(text) {
+      const t = String(text || '').toLowerCase().trim();
+      if (!t) return false;
+      return (
+        /\bкто\b/.test(t) && (/(создател[ья]|создал|создан|автор)/.test(t) || /тебя\s+создал/.test(t) || /вас\s+создал/.test(t))
+      ) || /кто\s+твой\s+создател/.test(t) || /кто\s+ваш\s+создател/.test(t) ||
+        /who\s+(created|made)\s+you/.test(t) || /who\s+is\s+your\s+creator/.test(t);
     }
 
-    return res.status(upstreamRes.status).json(data);
-  } catch (e) {
-    const msg = (e && e.message) ? String(e.message) : 'Unknown server error';
-    return res.status(500).json({ error: { message: msg } });
-  }
-};
+    async function copyToClipboard(text) {
+      const value = String(text ?? '');
+      try {
+        await navigator.clipboard.writeText(value);
+        setStatus('Скопировано.', 'success');
+        setTimeout(() => setStatus(''), 900);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+          document.execCommand('copy');
+          setStatus('Скопировано.', 'success');
+          setTimeout(() => setStatus(''), 900);
+        } catch {
+          setStatus('Не удалось скопировать. Скопируйте вручную.', 'error');
+        } finally {
+          document.body.removeChild(ta);
+        }
+      }
+    }
+
+    function tsvFromTable(table) {
+      const rows = Array.from(table.querySelectorAll('tr'));
+      const lines = rows.map(tr => {
+        const cells = Array.from(tr.querySelectorAll('th,td')).map(td => {
+          const raw = (td.innerText || '').replace(/\r?\n+/g, ' ').trim();
+          return raw.replace(/\t/g, ' ').replace(/\n/g, ' ');
+        });
+        return cells.join('\t');
+      });
+      return lines.join('\n').trim();
+    }
+
+    function enhanceRichContent(root) {
+      if (!root) return;
+
+      // Defensive: clean code blocks in DOM (helps selection copy)
+      root.querySelectorAll('pre code').forEach(codeEl => {
+        if (codeEl.dataset.cleaned === '1') return;
+        const raw = codeEl.textContent || '';
+        const cls = (codeEl.getAttribute('class') || '').toLowerCase();
+        const preserveTags = /language-(html|xml|svg|xhtml)\b/.test(cls);
+        const cleaned = stripHighlightMarkup(raw, { preserveTags });
+        if (cleaned !== raw) codeEl.textContent = cleaned;
+        codeEl.dataset.cleaned = '1';
+      });
+
+      // Copy buttons for code blocks
+      root.querySelectorAll('pre').forEach(pre => {
+        if (pre.dataset.enhanced === '1') return;
+        pre.dataset.enhanced = '1';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = [
+          'absolute top-2 right-2',
+          'rounded-lg border border-white/10 bg-white/5',
+          'px-2.5 py-1.5 text-[11px] text-slate-200',
+          'hover:bg-white/10 active:scale-[0.99] transition'
+        ].join(' ');
+        btn.textContent = 'Копировать';
+
+        btn.addEventListener('click', async () => {
+          const code = pre.querySelector('code');
+          const text = code ? (code.innerText || '') : (pre.innerText || '');
+          await copyToClipboard(normalizeForCopy(text).trim());
+        });
+
+        pre.appendChild(btn);
+      });
+
+      // Copy buttons for tables (copy as TSV for Excel)
+      root.querySelectorAll('table').forEach(table => {
+        if (table.dataset.enhanced === '1') return;
+        table.dataset.enhanced = '1';
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mt-3 rounded-2xl border border-white/10 bg-slate-950/25 overflow-hidden';
+
+        const bar = document.createElement('div');
+        bar.className = 'flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 bg-white/5';
+
+        const label = document.createElement('div');
+        label.className = 'text-[11px] text-slate-300';
+        label.textContent = 'Таблица';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 active:scale-[0.99] transition';
+        btn.textContent = 'Копировать';
+
+        btn.addEventListener('click', async () => {
+          const tsv = tsvFromTable(table);
+          if (!tsv) {
+            setStatus('Не получилось прочитать таблицу.', 'error');
+            return;
+          }
+          await copyToClipboard(tsv);
+        });
+
+        bar.appendChild(label);
+        bar.appendChild(btn);
+
+        const scroller = document.createElement('div');
+        scroller.className = 'overflow-auto hide-scrollbar';
+        scroller.style.maxWidth = '100%';
+
+        const parent = table.parentElement;
+        parent.insertBefore(wrapper, table);
+        scroller.appendChild(table);
+        wrapper.appendChild(bar);
+        wrapper.appendChild(scroller);
+      });
+
+      // Copy whole assistant message
+      const msgRoot = root.closest('[data-msg-role="assistant"]');
+      if (msgRoot && msgRoot.dataset.copyReady !== '1') {
+        msgRoot.dataset.copyReady = '1';
+        const btn = msgRoot.querySelector('[data-copy-answer]');
+        if (btn) {
+          btn.addEventListener('click', async () => {
+            const src = msgRoot.dataset.raw || (msgRoot.querySelector('[data-msg-content]')?.innerText || '');
+            const cleanedMd = normalizeAssistantMarkdown(src);
+            await copyToClipboard(normalizeForCopy(cleanedMd).trim());
+          });
+        }
+      }
+    }
+
+    function autoGrowTextarea() {
+      elPrompt.style.height = 'auto';
+      const max = 180;
+      const next = Math.min(elPrompt.scrollHeight, max);
+      elPrompt.style.height = next + 'px';
+      elPrompt.style.overflowY = (elPrompt.scrollHeight > max) ? 'auto' : 'hidden';
+    }
+
+    function closeDrawer(animate = true) {
+      if (!drawerBackdrop) return;
+      if (animate && drawer) {
+        drawer.classList.remove('drawer-enter', 'drawer-enter-active');
+        drawer.classList.add('drawer-leave');
+        requestAnimationFrame(() => {
+          drawer.classList.add('drawer-leave-active');
+          setTimeout(() => {
+            drawer.classList.remove('drawer-leave', 'drawer-leave-active');
+            drawerBackdrop.classList.add('hidden');
+          }, 230);
+        });
+      } else {
+        drawerBackdrop.classList.add('hidden');
+      }
+      document.body.style.overflow = '';
+    }
+
+    function openDrawer() {
+      if (!drawerBackdrop) return;
+      drawerBackdrop.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      if (drawer) {
+        drawer.classList.remove('drawer-leave', 'drawer-leave-active');
+        drawer.classList.add('drawer-enter');
+        requestAnimationFrame(() => {
+          drawer.classList.add('drawer-enter-active');
+          setTimeout(() => {
+            drawer.classList.remove('drawer-enter', 'drawer-enter-active');
+          }, 240);
+        });
+      }
+    }
+
+    function setActiveChatTitle(title) {
+      elActiveChatTitle.textContent = title || 'Чат';
+      document.title = (title ? `${title} — photonn AI` : 'photonn AI');
+    }
+
+    function setSidebarCollapsed(collapsed) {
+      document.body.classList.toggle('sidebar-collapsed', !!collapsed);
+      lsSet(LS_SIDEBAR, collapsed ? '1' : '0');
+    }
+
+    function toggleSidebar() {
+      const next = !document.body.classList.contains('sidebar-collapsed');
+      setSidebarCollapsed(next);
+    }
+
+    // ====== Storage ======
+    function loadChats() {
+      const raw = lsGet(LS_CHATS);
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        return arr
+          .filter(c => c && typeof c.id === 'string' && Array.isArray(c.messages))
+          .map(c => ({
+            id: c.id,
+            title: String(c.title || 'Чат'),
+            createdAt: Number(c.createdAt || Date.now()),
+            updatedAt: Number(c.updatedAt || c.createdAt || Date.now()),
+            messages: c.messages
+              .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+              .map(m => {
+                const content = (m.role === 'assistant') ? normalizeAssistantMarkdown(m.content) : m.content;
+                return { role: m.role, content, ts: Number(m.ts || Date.now()) };
+              })
+          }));
+      } catch {
+        return [];
+      }
+    }
+
+    function saveChats() {
+      // keep last 50 chats, each last 120 messages
+      const trimmed = chats
+        .slice()
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 50)
+        .map(c => ({
+          ...c,
+          messages: c.messages.slice(-120)
+        }));
+
+      lsSet(LS_CHATS, JSON.stringify(trimmed));
+      if (activeChatId) lsSet(LS_ACTIVE, activeChatId);
+    }
+
+    function getActiveChat() {
+      return chats.find(c => c.id === activeChatId) || null;
+    }
+
+    function ensureAtLeastOneChat() {
+      if (chats.length > 0) return;
+      const c = {
+        id: uid(),
+        title: 'Новый чат',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [{
+          role: 'assistant',
+          content: 'Привет! Чем могу помочь?',
+          ts: Date.now()
+        }]
+      };
+      chats = [c];
+      activeChatId = c.id;
+      saveChats();
+    }
+
+    function pickActiveChat() {
+      const stored = lsGet(LS_ACTIVE);
+      if (stored && chats.some(c => c.id === stored)) {
+        activeChatId = stored;
+      } else {
+        activeChatId = chats[0]?.id || null;
+      }
+    }
+
+    // ====== Rendering ======
+    function renderChatList() {
+      const items = chats
+        .slice()
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+
+      const makeItem = (chat) => {
+        const isActive = chat.id === activeChatId;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = [
+          'w-full text-left rounded-xl border px-3 py-2 transition',
+          'will-change-transform',
+          isActive ? 'border-white/12 bg-white/10' : 'border-white/10 bg-white/5 hover:bg-white/8'
+        ].join(' ');
+
+        const title = escapeText(chat.title || 'Чат');
+        const lastMsg = chat.messages.slice().reverse().find(m => m.role === 'user' || m.role === 'assistant');
+        const preview = escapeText((lastMsg?.content || '').replace(/\s+/g, ' ').trim()).slice(0, 70);
+        const time = formatTime(chat.updatedAt);
+
+        btn.innerHTML = `
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-sm text-slate-100 font-medium truncate">${title}</div>
+              <div class="mt-0.5 text-[11px] text-slate-400 truncate">${preview || '—'}</div>
+            </div>
+            <div class="shrink-0 flex items-center gap-2">
+              <div class="text-[10px] text-slate-500">${time}</div>
+            </div>
+          </div>
+          <div class="mt-2 flex items-center justify-end gap-2">
+            <button data-action="rename" class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Переименовать</button>
+            <button data-action="delete" class="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Удалить</button>
+          </div>
+        `;
+
+        btn.addEventListener('click', (e) => {
+          const action = e.target?.dataset?.action;
+          if (action === 'rename') {
+            e.preventDefault();
+            e.stopPropagation();
+            const next = prompt('Название чата:', chat.title || '');
+            if (next === null) return;
+            chat.title = String(next).trim() || 'Чат';
+            chat.updatedAt = Date.now();
+            saveChats();
+            renderChatList();
+            if (chat.id === activeChatId) setActiveChatTitle(chat.title);
+            return;
+          }
+          if (action === 'delete') {
+            e.preventDefault();
+            e.stopPropagation();
+            const ok = confirm('Удалить этот чат?');
+            if (!ok) return;
+            chats = chats.filter(c => c.id !== chat.id);
+            if (activeChatId === chat.id) {
+              activeChatId = chats[0]?.id || null;
+            }
+            ensureAtLeastOneChat();
+            saveChats();
+            renderChatList();
+            renderActiveChat();
+            return;
+          }
+
+          // select chat
+          activeChatId = chat.id;
+          lsSet(LS_ACTIVE, activeChatId);
+          renderChatList();
+          renderActiveChat();
+          closeDrawer(true);
+        });
+
+        return btn;
+      };
+
+      const mount = (root) => {
+        if (!root) return;
+        root.innerHTML = '';
+        items.forEach(chat => {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'group';
+          wrapper.appendChild(makeItem(chat));
+          root.appendChild(wrapper);
+        });
+      };
+
+      mount(elChatList);
+      mount(elChatListMobile);
+    }
+
+    function renderTyping() {
+      const wrap = document.createElement('div');
+      wrap.className = 'flex items-start gap-3 msg-animate';
+      wrap.dataset.msgRole = 'assistant';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'shrink-0 h-9 w-9 rounded-2xl border border-white/10 bg-white/5 grid place-items-center text-xs text-slate-200 shadow-sm';
+      avatar.textContent = 'AI';
+
+      const card = document.createElement('div');
+      card.className = 'group w-full max-w-3xl rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-sm';
+
+      const meta = document.createElement('div');
+      meta.className = 'mb-2 flex items-center justify-between gap-3 text-[11px] text-slate-400';
+      meta.innerHTML = `<span>Ассистент</span><span>${formatTime(Date.now())}</span>`;
+
+      const content = document.createElement('div');
+      content.className = 'text-sm text-slate-100';
+      content.innerHTML = `<div class="inline-flex items-center gap-2"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
+
+      card.appendChild(meta);
+      card.appendChild(content);
+      wrap.appendChild(avatar);
+      wrap.appendChild(card);
+      elChat.appendChild(wrap);
+      return wrap;
+    }
+
+    function renderMessage(msg) {
+      const isUser = msg.role === 'user';
+      const isAssistant = msg.role === 'assistant';
+
+      const wrap = document.createElement('div');
+      wrap.className = (isUser ? 'flex items-start justify-end gap-3' : 'flex items-start gap-3') + ' msg-animate';
+      wrap.dataset.msgRole = msg.role;
+
+      const avatar = document.createElement('div');
+      avatar.className = 'shrink-0 h-9 w-9 rounded-2xl border border-white/10 shadow-sm grid place-items-center text-xs text-slate-200';
+      avatar.classList.add('bg-white/5');
+      avatar.textContent = isUser ? 'Вы' : 'AI';
+
+      const card = document.createElement('div');
+      card.className = isUser
+        ? 'w-full max-w-3xl rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-sm'
+        : 'group w-full max-w-3xl rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-sm';
+
+      const meta = document.createElement('div');
+      meta.className = 'mb-2 flex items-center justify-between gap-3 text-[11px] text-slate-400';
+
+      if (isAssistant) {
+        meta.innerHTML = `
+          <span>Ассистент</span>
+          <span class="inline-flex items-center gap-2">
+            <button data-copy-answer type="button" class="hidden group-hover:inline-flex rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Копировать</button>
+            <span>${formatTime(msg.ts)}</span>
+          </span>
+        `;
+        wrap.dataset.raw = msg.content || '';
+      } else {
+        meta.innerHTML = `<span>Вы</span><span>${formatTime(msg.ts)}</span>`;
+      }
+
+      const content = document.createElement('div');
+      content.dataset.msgContent = '1';
+      content.className = 'prose-lite text-sm text-slate-100';
+
+      if (isUser) {
+        content.innerHTML = `<div class="whitespace-pre-wrap">${escapeText(msg.content)}</div>`;
+      } else {
+        content.innerHTML = marked.parse(msg.content || '');
+      }
+
+      card.appendChild(meta);
+      card.appendChild(content);
+
+      if (isUser) {
+        wrap.appendChild(card);
+        wrap.appendChild(avatar);
+      } else {
+        wrap.appendChild(avatar);
+        wrap.appendChild(card);
+      }
+
+      elChat.appendChild(wrap);
+      if (isAssistant) enhanceRichContent(content);
+    }
+
+    function renderActiveChat() {
+      const chat = getActiveChat();
+      elChat.innerHTML = '';
+
+      if (!chat) {
+        setActiveChatTitle('Чат');
+        return;
+      }
+      setActiveChatTitle(chat.title);
+
+      for (const m of chat.messages) renderMessage(m);
+      scrollToBottom();
+    }
+
+    // ====== API ======
+    function buildMessagesForApi(activeChat) {
+      const maxTurns = 32;
+      const sys = { role: 'system', content: SYSTEM_PROMPT };
+      const tail = activeChat.messages.slice(-maxTurns);
+      return [sys, ...tail].map(m => ({ role: m.role, content: m.content }));
+    }
+
+    function safeJsonStringify(value, maxLen = 1600) {
+      try {
+        const s = JSON.stringify(value, null, 2);
+        if (!s) return '';
+        return (s.length > maxLen) ? (s.slice(0, maxLen).trimEnd() + '\n…') : s;
+      } catch {
+        return '';
+      }
+    }
+
+    function toErrorText(err) {
+      if (err == null) return '';
+      if (typeof err === 'string') return err;
+      if (err instanceof Error) {
+        const m = err.message;
+        if (typeof m === 'string' && m.trim()) return m;
+        const j = safeJsonStringify({ name: err.name, message: err.message, stack: err.stack });
+        return j || String(err);
+      }
+      if (typeof err === 'object') {
+        const msg = err.message || err.error?.message || err.error?.error?.message || err.error || err.msg || err.detail;
+        if (typeof msg === 'string' && msg.trim()) return msg;
+        const j = safeJsonStringify(err);
+        return j || Object.prototype.toString.call(err);
+      }
+      return String(err);
+    }
+
+    function extractApiError(payload) {
+      if (!payload) return '';
+
+      const err = payload?.error;
+      if (typeof err === 'string') return err.trim();
+      if (err && typeof err === 'object') {
+        const em = err?.message;
+        if (typeof em === 'string' && em.trim()) return em.trim();
+        const j = safeJsonStringify(err);
+        if (j && j.trim() !== '{}' && j.trim() !== 'null') return j;
+      }
+
+      if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
+
+      // Some gateways respond with {} on errors
+      const fallback = safeJsonStringify(payload);
+      const fb = (fallback || '').trim();
+      if (fb === '{}' || fb === 'null') return '';
+      return fb;
+    }
+
+    function parseRetryAfterSeconds(res, msgText) {
+      try {
+        const h = res?.headers?.get?.('retry-after');
+        if (h && String(h).trim()) {
+          const n = Number(String(h).trim());
+          if (Number.isFinite(n) && n > 0) return n;
+        }
+      } catch {}
+
+      const m = String(msgText || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return 0;
+    }
+
+    async function callApi(activeChat) {
+      const body = {
+        model: MODEL,
+        messages: buildMessagesForApi(activeChat),
+        temperature: 0.35,
+        top_p: 0.9,
+        max_tokens: 900
+      };
+
+      const endpoints = getEndpointCandidates();
+      let lastErr = null;
+
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          });
+
+          const rawText = await res.text().catch(() => '');
+          let data = {};
+          try {
+            data = rawText ? JSON.parse(rawText) : {};
+          } catch {
+            const snippet = String(rawText || '').trim();
+            data = { error: { message: snippet ? snippet.slice(0, 800) : '' } };
+          }
+
+          if (!res.ok) {
+            let msg = extractApiError(data);
+
+            // Better diagnostics for deployment issues
+            if (res.status === 405) {
+              msg = msg || 'HTTP 405: метод не разрешён для API.';
+              msg += ` Путь: ${url}`;
+              msg += ' Проверьте, что /api/chat принимает POST и что serverless-функция действительно задеплоена.';
+            } else if (res.status === 404) {
+              msg = msg || 'HTTP 404: API endpoint не найден.';
+              msg += ` Путь: ${url}`;
+              msg += ' Проверьте, что существует /api/chat (или <basePath>/api/chat, если сайт открыт в подпапке).';
+            }
+
+            if (!msg) msg = `HTTP ${res.status} (empty error payload)`;
+
+            const isRate = (res.status === 429) || /rate limit|too many requests|quota/i.test(msg);
+            if (isRate) {
+              const retrySec = parseRetryAfterSeconds(res, msg);
+              if (retrySec > 0) startCooldown(retrySec);
+            }
+
+            // Try next endpoint (useful for basePath deployments)
+            lastErr = new Error(msg);
+            continue;
+          }
+
+          const text = data?.choices?.[0]?.message?.content;
+          if (!text) throw new Error('Пустой ответ.');
+          return String(text);
+        } catch (e) {
+          lastErr = (e instanceof Error) ? e : new Error(toErrorText(e) || 'Ошибка запроса.');
+          continue;
+        }
+      }
+
+      throw lastErr || new Error('Не удалось вызвать API.');
+    }
+
+    // ====== Chat actions ======
+    function makeTitleFromText(text) {
+      const t = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!t) return 'Чат';
+      return t.length > 44 ? (t.slice(0, 44).trim() + '…') : t;
+    }
+
+    function newChat() {
+      const c = {
+        id: uid(),
+        title: 'Новый чат',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [{ role: 'assistant', content: 'Привет! Чем могу помочь?', ts: Date.now() }]
+      };
+      chats.unshift(c);
+      activeChatId = c.id;
+      saveChats();
+      renderChatList();
+      renderActiveChat();
+      closeDrawer(true);
+      setStatus('Новый чат создан.', 'success');
+      setTimeout(() => setStatus(''), 900);
+      elPrompt.focus();
+    }
+
+    function clearAllChats() {
+      const ok = confirm('Очистить все чаты?');
+      if (!ok) return;
+      chats = [];
+      activeChatId = null;
+      ensureAtLeastOneChat();
+      saveChats();
+      renderChatList();
+      renderActiveChat();
+      closeDrawer(true);
+      setStatus('Все чаты очищены.', 'success');
+      setTimeout(() => setStatus(''), 900);
+    }
+
+    // ====== Send ======
+    async function send() {
+      const cd = cooldownRemainingSec();
+      if (cd > 0) {
+        setStatus(`Подождите ${cd} сек. и попробуйте снова.`, 'warn');
+        return;
+      }
+
+      const text = (elPrompt.value || '').trim();
+      if (!text) {
+        setStatus('Введите сообщение.', 'warn');
+        return;
+      }
+
+      const chat = getActiveChat();
+      if (!chat) {
+        setStatus('Чат не найден. Создайте новый.', 'error');
+        return;
+      }
+
+      setStatus('');
+      setLoading(true);
+
+      const userMsg = { role: 'user', content: text, ts: Date.now() };
+      chat.messages.push(userMsg);
+      chat.updatedAt = Date.now();
+
+      // Auto-title on first user message
+      const hasUserBefore = chat.messages.filter(m => m.role === 'user').length > 1;
+      if (!hasUserBefore && (chat.title === 'Новый чат' || chat.title === 'Чат')) {
+        chat.title = makeTitleFromText(text);
+      }
+
+      elPrompt.value = '';
+      autoGrowTextarea();
+      renderChatList();
+      renderActiveChat();
+
+      // Hard rule: creator question -> fixed reply (no API call)
+      if (isCreatorQuestion(text)) {
+        const assistantMsg = { role: 'assistant', content: CREATOR_REPLY, ts: Date.now() };
+        chat.messages.push(assistantMsg);
+        chat.updatedAt = Date.now();
+        saveChats();
+        renderChatList();
+        renderActiveChat();
+        setLoading(false);
+        return;
+      }
+
+      const typingEl = renderTyping();
+      scrollToBottom();
+
+      try {
+        const reply = await callApi(chat);
+        typingEl?.remove();
+
+        const normalized = normalizeAssistantMarkdown(reply);
+        const assistantMsg = { role: 'assistant', content: normalized, ts: Date.now() };
+        chat.messages.push(assistantMsg);
+        chat.updatedAt = Date.now();
+
+        if (/(<span\b[^>]*\b(token|hljs)\b|\bclass=("|')token-)/i.test(reply)) {
+          setStatus('В ответе была HTML-подсветка кода. Используйте кнопку «Копировать» — она очищает код.', 'warn');
+          setTimeout(() => setStatus(''), 3000);
+        }
+
+        saveChats();
+        renderChatList();
+        renderActiveChat();
+      } catch (e) {
+        typingEl?.remove();
+
+        const rawMsg = toErrorText(e);
+
+        // Friendly error messages
+        let msg = rawMsg;
+
+        const retryMatch = String(rawMsg || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
+        const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
+        if (Number.isFinite(retrySeconds) && retrySeconds > 0) startCooldown(retrySeconds);
+
+        if (/http\s*405/i.test(rawMsg)) {
+          msg = 'Серверный API-роут недоступен (HTTP 405). Обычно это значит, что /api/chat не задеплоен как serverless-функция или хостинг не поддерживает API routes.';
+        } else if (/server is not configured|openrouter_api_key/i.test(rawMsg)) {
+          msg = 'Сервер не настроен: задайте переменную окружения OPENROUTER_API_KEY в настройках проекта (Vercel) и сделайте redeploy.';
+        } else if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
+          msg = 'Не удалось авторизоваться (ключ недействителен, отключён или лимитирован).';
+        } else if (/unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(rawMsg)) {
+          msg = 'Доступ запрещён. Ключ недействителен или отключён.';
+        } else if (/rate limit|too many requests|429|quota/i.test(rawMsg)) {
+          msg = 'Слишком много запросов или превышены лимиты. Подождите немного и попробуйте снова.';
+          if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+            msg += ` (можно повторить примерно через ${Math.ceil(retrySeconds)} сек.)`;
+          }
+        } else if (/timeout|networkerror|failed to fetch/i.test(rawMsg)) {
+          msg = 'Проблема с сетью или доступом к серверу. Проверьте интернет и попробуйте ещё раз.';
+        } else if (!String(msg || '').trim()) {
+          msg = 'Неизвестная ошибка.';
+        }
+
+        setStatus(`Ошибка: ${msg}`, 'error');
+
+        let details = String(rawMsg || msg || '').trim();
+        if (details.length > 1500) details = details.slice(0, 1500).trimEnd() + '\n…';
+        chat.messages.push({
+          role: 'assistant',
+          ts: Date.now(),
+          content:
+            '**Не удалось получить ответ.**\n\n' +
+            'Попробуйте ещё раз чуть позже или переформулируйте запрос.\n\n' +
+            '```\n' + details + '\n```'
+        });
+        chat.updatedAt = Date.now();
+        saveChats();
+        renderChatList();
+        renderActiveChat();
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    // ====== Events ======
+    btnSend.addEventListener('click', send);
+    elPrompt.addEventListener('input', autoGrowTextarea);
+
+    // Enter = send, Shift+Enter = newline
+    elPrompt.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+
+    btnNewChat.addEventListener('click', newChat);
+    btnNewChatSidebar?.addEventListener('click', newChat);
+    btnNewChatDrawer?.addEventListener('click', newChat);
+
+    btnClearAll?.addEventListener('click', clearAllChats);
+    btnClearAllMobile?.addEventListener('click', clearAllChats);
+
+    btnOpenDrawer?.addEventListener('click', openDrawer);
+    btnCloseDrawer?.addEventListener('click', () => closeDrawer(true));
+    drawerBackdrop?.addEventListener('click', (e) => {
+      if (e.target === drawerBackdrop || (e.target?.closest('#drawerBackdrop') && !e.target?.closest('#drawer'))) {
+        closeDrawer(true);
+      }
+    });
+
+    btnToggleSidebar?.addEventListener('click', toggleSidebar);
+    btnCollapseSidebar?.addEventListener('click', () => setSidebarCollapsed(true));
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeDrawer(true);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    });
+
+    // If user copies selection from code block, force plain-text cleaned
+    document.addEventListener('copy', (e) => {
+      try {
+        const sel = window.getSelection?.();
+        if (!sel || sel.rangeCount === 0) return;
+        const node = sel.anchorNode;
+        const el = node?.nodeType === 1 ? node : node?.parentElement;
+        const pre = el?.closest?.('pre');
+        if (!pre) return;
+
+        const code = pre.querySelector('code');
+        const cls = (code?.getAttribute('class') || '').toLowerCase();
+        const preserveTags = /language-(html|xml|svg|xhtml)\b/.test(cls);
+
+        const text = (code?.textContent || pre.textContent || '').trimEnd();
+        const cleaned = stripHighlightMarkup(text, { preserveTags });
+
+        if (e.clipboardData) {
+          e.clipboardData.setData('text/plain', normalizeForCopy(cleaned));
+          e.preventDefault();
+        }
+      } catch {}
+    });
+
+    // ====== Init ======
+    const hasStorage = checkStorageAvailable();
+    if (!hasStorage) {
+      // Не навязываем попапы — просто мягко предупреждаем.
+      setStatus('В браузере ограничен доступ к хранилищу (Tracking Prevention/Private Mode). История чатов может не сохраниться после перезагрузки.', 'warn');
+      setTimeout(() => setStatus(''), 5500);
+    }
+
+    chats = loadChats();
+    ensureAtLeastOneChat();
+    pickActiveChat();
+    renderChatList();
+    renderActiveChat();
+
+    // Sidebar collapsed state
+    const collapsed = (lsGet(LS_SIDEBAR) === '1');
+    setSidebarCollapsed(collapsed);
+
+    elPrompt.value = '';
+    autoGrowTextarea();
+    updateSendState();
+    elPrompt.focus();
+  </script>
+</body>
+</html>
