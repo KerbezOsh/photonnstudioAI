@@ -320,11 +320,27 @@
     // Настройка: в Vercel добавьте переменную окружения OPENROUTER_API_KEY со своим ключом.
     const MODEL = 'xiaomi/mimo-v2-flash:free';
 
-    // Try root endpoint first, then basePath endpoint (for deployments in subfolders)
+    // Try multiple endpoint variants (root + basePath + trailing slash)
+    // This fixes cases when the site is served from a subfolder or without a trailing slash.
+    function getBasePath() {
+      const p = String(location.pathname || '/');
+      if (p.endsWith('/')) return p;
+      // If URL looks like a file (/path/index.html) => strip file
+      if (/\.[a-z0-9]+$/i.test(p)) return p.replace(/\/[^\/]*$/, '/');
+      // If URL is a folder without trailing slash (/app) => treat as folder
+      return p + '/';
+    }
+
     function getEndpointCandidates() {
-      const basePath = new URL('./', location.href).pathname; // always ends with '/'
-      const viaBase = (basePath.endsWith('/') ? basePath : (basePath + '/')) + 'api/chat';
-      const list = ['/api/chat', viaBase];
+      const basePath = getBasePath();
+      const list = [
+        '/api/chat',
+        '/api/chat/',
+        basePath + 'api/chat',
+        basePath + 'api/chat/',
+        'api/chat',
+        './api/chat'
+      ];
       return Array.from(new Set(list.map(s => String(s || '').trim()).filter(Boolean)));
     }
 
@@ -1211,9 +1227,11 @@
             // Better diagnostics for deployment issues
             if (res.status === 405) {
               msg = msg || 'HTTP 405: метод не разрешён для API.';
+              msg += ` Путь: ${url}`;
               msg += ' Проверьте, что /api/chat принимает POST и что serverless-функция действительно задеплоена.';
             } else if (res.status === 404) {
               msg = msg || 'HTTP 404: API endpoint не найден.';
+              msg += ` Путь: ${url}`;
               msg += ' Проверьте, что существует /api/chat (или <basePath>/api/chat, если сайт открыт в подпапке).';
             }
 
