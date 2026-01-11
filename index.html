@@ -319,7 +319,14 @@
     // На проде ключ нельзя хранить во фронтенде (его сразу «сожгут»). Поэтому запрос идёт через /api/chat.
     // Настройка: в Vercel добавьте переменную окружения OPENROUTER_API_KEY со своим ключом.
     const MODEL = 'xiaomi/mimo-v2-flash:free';
-    const ENDPOINT = '/api/chat';
+
+    // Try root endpoint first, then basePath endpoint (for deployments in subfolders)
+    function getEndpointCandidates() {
+      const basePath = new URL('./', location.href).pathname; // always ends with '/'
+      const viaBase = (basePath.endsWith('/') ? basePath : (basePath + '/')) + 'api/chat';
+      const list = ['/api/chat', viaBase];
+      return Array.from(new Set(list.map(s => String(s || '').trim()).filter(Boolean)));
+    }
 
     const SYSTEM_PROMPT = [
       'Ты — полезный AI‑ассистент.',
@@ -1175,32 +1182,64 @@
         max_tokens: 900
       };
 
-      const res = await fetch(ENDPOINT, {
-        method: 'POST',
-        cache: 'no-store',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body)
-      });
+      const endpoints = getEndpointCandidates();
+      let lastErr = null;
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        let msg = extractApiError(data);
-        if (!msg) msg = `HTTP ${res.status} (empty error payload)`;
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          });
 
-        const isRate = (res.status === 429) || /rate limit|too many requests|quota/i.test(msg);
-        if (isRate) {
-          const retrySec = parseRetryAfterSeconds(res, msg);
-          if (retrySec > 0) startCooldown(retrySec);
+          const rawText = await res.text().catch(() => '');
+          let data = {};
+          try {
+            data = rawText ? JSON.parse(rawText) : {};
+          } catch {
+            const snippet = String(rawText || '').trim();
+            data = { error: { message: snippet ? snippet.slice(0, 800) : '' } };
+          }
+
+          if (!res.ok) {
+            let msg = extractApiError(data);
+
+            // Better diagnostics for deployment issues
+            if (res.status === 405) {
+              msg = msg || 'HTTP 405: метод не разрешён для API.';
+              msg += ' Проверьте, что /api/chat принимает POST и что serverless-функция действительно задеплоена.';
+            } else if (res.status === 404) {
+              msg = msg || 'HTTP 404: API endpoint не найден.';
+              msg += ' Проверьте, что существует /api/chat (или <basePath>/api/chat, если сайт открыт в подпапке).';
+            }
+
+            if (!msg) msg = `HTTP ${res.status} (empty error payload)`;
+
+            const isRate = (res.status === 429) || /rate limit|too many requests|quota/i.test(msg);
+            if (isRate) {
+              const retrySec = parseRetryAfterSeconds(res, msg);
+              if (retrySec > 0) startCooldown(retrySec);
+            }
+
+            // Try next endpoint (useful for basePath deployments)
+            lastErr = new Error(msg);
+            continue;
+          }
+
+          const text = data?.choices?.[0]?.message?.content;
+          if (!text) throw new Error('Пустой ответ.');
+          return String(text);
+        } catch (e) {
+          lastErr = (e instanceof Error) ? e : new Error(toErrorText(e) || 'Ошибка запроса.');
+          continue;
         }
-
-        throw new Error(msg);
       }
 
-      const text = data?.choices?.[0]?.message?.content;
-      if (!text) throw new Error('Пустой ответ.');
-      return String(text);
+      throw lastErr || new Error('Не удалось вызвать API.');
     }
 
     // ====== Chat actions ======
@@ -1325,7 +1364,9 @@
         const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
         if (Number.isFinite(retrySeconds) && retrySeconds > 0) startCooldown(retrySeconds);
 
-        if (/server is not configured|openrouter_api_key/i.test(rawMsg)) {
+        if (/http\s*405/i.test(rawMsg)) {
+          msg = 'Серверный API-роут недоступен (HTTP 405). Обычно это значит, что /api/chat не задеплоен как serverless-функция или хостинг не поддерживает API routes.';
+        } else if (/server is not configured|openrouter_api_key/i.test(rawMsg)) {
           msg = 'Сервер не настроен: задайте переменную окружения OPENROUTER_API_KEY в настройках проекта (Vercel) и сделайте redeploy.';
         } else if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
           msg = 'Не удалось авторизоваться (ключ недействителен, отключён или лимитирован).';
