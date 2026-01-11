@@ -270,6 +270,41 @@
           <div id="status" class="pointer-events-auto hidden max-w-2xl w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200 shadow-2xl backdrop-blur-xl"></div>
         </div>
 
+        <!-- Access key modal (appears only on auth errors) -->
+        <div id="keyModal" class="fixed inset-0 z-50 hidden">
+          <div id="keyModalOverlay" class="absolute inset-0 bg-black/65"></div>
+          <div class="relative mx-auto flex min-h-[100dvh] max-w-lg items-center px-4" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
+            <div class="w-full rounded-3xl border border-white/10 glass soft-shadow">
+              <div class="p-5">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-base font-semibold tracking-tight">Требуется ключ доступа</div>
+                    <div class="mt-1 text-sm text-slate-400">Для работы чата нужен действующий ключ API. Он сохранится только в вашем браузере.</div>
+                  </div>
+                  <button id="btnCloseKeyModal" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Закрыть</button>
+                </div>
+
+                <div class="mt-4">
+                  <label class="block text-[12px] text-slate-300">Ключ</label>
+                  <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false"
+                    class="mt-2 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:ring-4 focus:ring-indigo-500/15"
+                    placeholder="Вставьте ключ…" />
+                  <div id="keyModalHint" class="mt-2 text-[12px] text-slate-500"></div>
+                </div>
+
+                <div class="mt-5 flex flex-col sm:flex-row gap-2">
+                  <button id="btnSaveKey" class="flex-1 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/15 hover:shadow-indigo-500/30 active:scale-[0.99] transition">Сохранить и продолжить</button>
+                  <button id="btnClearSavedKey" class="sm:w-auto rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Сбросить</button>
+                </div>
+
+                <div class="mt-4 text-[12px] text-slate-500 leading-relaxed">
+                  Если вы используете общий/публичный ключ, он мог быть отключён после деплоя.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Chat area -->
         <main class="flex-1 min-h-0">
           <div id="chatScroll" class="h-full overflow-auto hide-scrollbar">
@@ -332,6 +367,7 @@
     const LS_CHATS = 'photonn_ai_chats_v2';
     const LS_ACTIVE = 'photonn_ai_active_chat_v2';
     const LS_SIDEBAR = 'photonn_ai_sidebar_collapsed_v1';
+    const LS_APIKEY = 'photonn_ai_api_key_v1';
 
     // ====== DOM ======
     const elChat = document.getElementById('chat');
@@ -360,6 +396,15 @@
     const sidebar = document.getElementById('sidebar');
     const btnToggleSidebar = document.getElementById('btnToggleSidebar');
     const btnCollapseSidebar = document.getElementById('btnCollapseSidebar');
+
+    // Key modal
+    const keyModal = document.getElementById('keyModal');
+    const keyModalOverlay = document.getElementById('keyModalOverlay');
+    const btnCloseKeyModal = document.getElementById('btnCloseKeyModal');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const btnSaveKey = document.getElementById('btnSaveKey');
+    const btnClearSavedKey = document.getElementById('btnClearSavedKey');
+    const keyModalHint = document.getElementById('keyModalHint');
 
     // ====== Markdown config (safe-ish: drop raw HTML + clean highlight artifacts) ======
     const renderer = new marked.Renderer();
@@ -726,6 +771,45 @@
       setSidebarCollapsed(next);
     }
 
+    // ====== API key (local only) ======
+    function getSavedApiKey() {
+      try {
+        const k = localStorage.getItem(LS_APIKEY);
+        return (k && String(k).trim()) ? String(k).trim() : '';
+      } catch {
+        return '';
+      }
+    }
+
+    function setSavedApiKey(k) {
+      try {
+        localStorage.setItem(LS_APIKEY, String(k || '').trim());
+      } catch {}
+    }
+
+    function clearSavedApiKey() {
+      try { localStorage.removeItem(LS_APIKEY); } catch {}
+    }
+
+    function openKeyModal(hint = '') {
+      if (!keyModal) return;
+      keyModal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      if (apiKeyInput) apiKeyInput.value = getSavedApiKey() || '';
+      if (keyModalHint) keyModalHint.textContent = hint || '';
+      setTimeout(() => apiKeyInput?.focus(), 50);
+    }
+
+    function closeKeyModal() {
+      if (!keyModal) return;
+      keyModal.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    function currentApiKey() {
+      return getSavedApiKey() || API_KEY;
+    }
+
     // ====== Storage ======
     function loadChats() {
       const raw = localStorage.getItem(LS_CHATS);
@@ -1016,11 +1100,13 @@
         max_tokens: 900
       };
 
+      const key = currentApiKey();
+
       const res = await fetch(ENDPOINT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${API_KEY}`,
+          'Authorization': `Bearer ${key}`,
           'HTTP-Referer': location.origin,
           'X-Title': 'photonn AI'
         },
@@ -1030,6 +1116,13 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const msg = extractApiError(data) || `HTTP ${res.status}`;
+
+        // Частые кейсы на проде (Vercel): ключ недействителен/отозван/лимиты/аккаунт.
+        const isAuth = (res.status === 401 || res.status === 403) || /user not found/i.test(msg);
+        if (isAuth) {
+          openKeyModal('Похоже, текущий ключ недействителен или отключён. Вставьте рабочий ключ и повторите.');
+        }
+
         throw new Error(msg);
       }
 
@@ -1145,7 +1238,18 @@
         renderActiveChat();
       } catch (e) {
         typingEl?.remove();
-        const msg = e?.message ? String(e.message) : String(e);
+        const rawMsg = e?.message ? String(e.message) : String(e);
+
+        // Более дружелюбные сообщения
+        let msg = rawMsg;
+        if (/user not found/i.test(rawMsg)) {
+          msg = 'Не удалось авторизоваться (ключ недействителен или отключён).';
+        } else if (/unauthorized|forbidden/i.test(rawMsg)) {
+          msg = 'Доступ запрещён. Проверьте ключ доступа.';
+        } else if (/rate limit|too many requests|429/i.test(rawMsg)) {
+          msg = 'Слишком много запросов. Подождите немного и попробуйте снова.';
+        }
+
         setStatus(`Ошибка: ${msg}`, 'error');
 
         chat.messages.push({
@@ -1194,6 +1298,26 @@
 
     btnToggleSidebar?.addEventListener('click', toggleSidebar);
     btnCollapseSidebar?.addEventListener('click', () => setSidebarCollapsed(true));
+
+    // Key modal events
+    btnCloseKeyModal?.addEventListener('click', closeKeyModal);
+    keyModalOverlay?.addEventListener('click', closeKeyModal);
+    btnSaveKey?.addEventListener('click', () => {
+      const next = String(apiKeyInput?.value || '').trim();
+      if (!next) {
+        if (keyModalHint) keyModalHint.textContent = 'Введите ключ.';
+        return;
+      }
+      setSavedApiKey(next);
+      closeKeyModal();
+      setStatus('Ключ сохранён в браузере. Повторите запрос.', 'success');
+      setTimeout(() => setStatus(''), 1400);
+    });
+    btnClearSavedKey?.addEventListener('click', () => {
+      clearSavedApiKey();
+      if (apiKeyInput) apiKeyInput.value = '';
+      if (keyModalHint) keyModalHint.textContent = 'Сохранённый ключ удалён.';
+    });
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeDrawer(true);
