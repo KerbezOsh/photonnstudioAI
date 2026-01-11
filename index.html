@@ -336,6 +336,51 @@
     const LS_ACTIVE = 'photonn_ai_active_chat_v2';
     const LS_SIDEBAR = 'photonn_ai_sidebar_collapsed_v1';
 
+    // Safari/Firefox Tracking Prevention (и Private Mode) иногда блокируют доступ к storage.
+    // Чтобы приложение не ломалось, используем безопасный слой с fallback в память.
+    const memoryStore = new Map();
+    let storageAvailable = false;
+
+    function checkStorageAvailable() {
+      try {
+        const k = '__photonn_ai_probe__';
+        localStorage.setItem(k, '1');
+        localStorage.removeItem(k);
+        storageAvailable = true;
+      } catch {
+        storageAvailable = false;
+      }
+      return storageAvailable;
+    }
+
+    function lsGet(key) {
+      const k = String(key || '');
+      if (!k) return null;
+      if (storageAvailable) {
+        try { return localStorage.getItem(k); } catch {}
+      }
+      return memoryStore.has(k) ? memoryStore.get(k) : null;
+    }
+
+    function lsSet(key, value) {
+      const k = String(key || '');
+      if (!k) return;
+      const v = String(value ?? '');
+      if (storageAvailable) {
+        try { localStorage.setItem(k, v); return; } catch {}
+      }
+      memoryStore.set(k, v);
+    }
+
+    function lsRemove(key) {
+      const k = String(key || '');
+      if (!k) return;
+      if (storageAvailable) {
+        try { localStorage.removeItem(k); } catch {}
+      }
+      memoryStore.delete(k);
+    }
+
     // ====== DOM ======
     const elChat = document.getElementById('chat');
     const elChatScroll = document.getElementById('chatScroll');
@@ -772,7 +817,7 @@
 
     function setSidebarCollapsed(collapsed) {
       document.body.classList.toggle('sidebar-collapsed', !!collapsed);
-      try { localStorage.setItem(LS_SIDEBAR, collapsed ? '1' : '0'); } catch {}
+      lsSet(LS_SIDEBAR, collapsed ? '1' : '0');
     }
 
     function toggleSidebar() {
@@ -782,7 +827,7 @@
 
     // ====== Storage ======
     function loadChats() {
-      const raw = localStorage.getItem(LS_CHATS);
+      const raw = lsGet(LS_CHATS);
       if (!raw) return [];
       try {
         const arr = JSON.parse(raw);
@@ -817,8 +862,8 @@
           messages: c.messages.slice(-120)
         }));
 
-      localStorage.setItem(LS_CHATS, JSON.stringify(trimmed));
-      if (activeChatId) localStorage.setItem(LS_ACTIVE, activeChatId);
+      lsSet(LS_CHATS, JSON.stringify(trimmed));
+      if (activeChatId) lsSet(LS_ACTIVE, activeChatId);
     }
 
     function getActiveChat() {
@@ -844,7 +889,7 @@
     }
 
     function pickActiveChat() {
-      const stored = localStorage.getItem(LS_ACTIVE);
+      const stored = lsGet(LS_ACTIVE);
       if (stored && chats.some(c => c.id === stored)) {
         activeChatId = stored;
       } else {
@@ -922,7 +967,7 @@
 
           // select chat
           activeChatId = chat.id;
-          localStorage.setItem(LS_ACTIVE, activeChatId);
+          lsSet(LS_ACTIVE, activeChatId);
           renderChatList();
           renderActiveChat();
           closeDrawer(true);
@@ -1383,6 +1428,13 @@
     });
 
     // ====== Init ======
+    const hasStorage = checkStorageAvailable();
+    if (!hasStorage) {
+      // Не навязываем попапы — просто мягко предупреждаем.
+      setStatus('В браузере ограничен доступ к хранилищу (Tracking Prevention/Private Mode). История чатов может не сохраниться после перезагрузки.', 'warn');
+      setTimeout(() => setStatus(''), 5500);
+    }
+
     chats = loadChats();
     ensureAtLeastOneChat();
     pickActiveChat();
@@ -1390,7 +1442,7 @@
     renderActiveChat();
 
     // Sidebar collapsed state
-    const collapsed = (localStorage.getItem(LS_SIDEBAR) === '1');
+    const collapsed = (lsGet(LS_SIDEBAR) === '1');
     setSidebarCollapsed(collapsed);
 
     elPrompt.value = '';
