@@ -6,6 +6,9 @@
   <title>photonn AI</title>
   <meta name="description" content="photonn AI — чат с сохранением диалогов." />
 
+  <!-- Favicon (inline to avoid 404 /favicon.ico) -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23020617'/%3E%3Ccircle cx='32' cy='32' r='18' fill='%2334d399'/%3E%3Ccircle cx='26' cy='28' r='5' fill='%230f172a' opacity='0.7'/%3E%3C/svg%3E" />
+
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 
@@ -270,41 +273,6 @@
           <div id="status" class="pointer-events-auto hidden max-w-2xl w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200 shadow-2xl backdrop-blur-xl"></div>
         </div>
 
-        <!-- Access key modal (appears only on auth errors) -->
-        <div id="keyModal" class="fixed inset-0 z-50 hidden">
-          <div id="keyModalOverlay" class="absolute inset-0 bg-black/65"></div>
-          <div class="relative mx-auto flex min-h-[100dvh] max-w-lg items-center px-4" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);">
-            <div class="w-full rounded-3xl border border-white/10 glass soft-shadow">
-              <div class="p-5">
-                <div class="flex items-start justify-between gap-3">
-                  <div>
-                    <div class="text-base font-semibold tracking-tight">Требуется ключ доступа</div>
-                    <div class="mt-1 text-sm text-slate-400">Для работы чата нужен действующий ключ API. Он сохранится только в вашем браузере.</div>
-                  </div>
-                  <button id="btnCloseKeyModal" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Закрыть</button>
-                </div>
-
-                <div class="mt-4">
-                  <label class="block text-[12px] text-slate-300">Ключ</label>
-                  <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false"
-                    class="mt-2 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:ring-4 focus:ring-indigo-500/15"
-                    placeholder="Вставьте ключ…" />
-                  <div id="keyModalHint" class="mt-2 text-[12px] text-slate-500"></div>
-                </div>
-
-                <div class="mt-5 flex flex-col sm:flex-row gap-2">
-                  <button id="btnSaveKey" class="flex-1 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/15 hover:shadow-indigo-500/30 active:scale-[0.99] transition">Сохранить и продолжить</button>
-                  <button id="btnClearSavedKey" class="sm:w-auto rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200 hover:bg-white/10 active:scale-[0.99] transition">Сбросить</button>
-                </div>
-
-                <div class="mt-4 text-[12px] text-slate-500 leading-relaxed">
-                  Если вы используете общий/публичный ключ, он мог быть отключён после деплоя.
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- Chat area -->
         <main class="flex-1 min-h-0">
           <div id="chatScroll" class="h-full overflow-auto hide-scrollbar">
@@ -348,7 +316,7 @@
 
   <script>
     // ====== API config ======
-    // В интерфейсе нет упоминаний провайдера. Запросы делаются к совместимому chat/completions API.
+    // ВАЖНО: ключ в фронтенде нельзя защитить (его видно в исходнике сайта).
     const API_KEY = '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';
     const MODEL = 'xiaomi/mimo-v2-flash:free';
     const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
@@ -367,7 +335,6 @@
     const LS_CHATS = 'photonn_ai_chats_v2';
     const LS_ACTIVE = 'photonn_ai_active_chat_v2';
     const LS_SIDEBAR = 'photonn_ai_sidebar_collapsed_v1';
-    const LS_APIKEY = 'photonn_ai_api_key_v1';
 
     // ====== DOM ======
     const elChat = document.getElementById('chat');
@@ -397,15 +364,6 @@
     const btnToggleSidebar = document.getElementById('btnToggleSidebar');
     const btnCollapseSidebar = document.getElementById('btnCollapseSidebar');
 
-    // Key modal
-    const keyModal = document.getElementById('keyModal');
-    const keyModalOverlay = document.getElementById('keyModalOverlay');
-    const btnCloseKeyModal = document.getElementById('btnCloseKeyModal');
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    const btnSaveKey = document.getElementById('btnSaveKey');
-    const btnClearSavedKey = document.getElementById('btnClearSavedKey');
-    const keyModalHint = document.getElementById('keyModalHint');
-
     // ====== Markdown config (safe-ish: drop raw HTML + clean highlight artifacts) ======
     const renderer = new marked.Renderer();
     renderer.html = () => '';
@@ -418,11 +376,57 @@
       }[ch]));
     }
 
-    // ВАЖНО: чистим содержимое code blocks/codespan перед рендером,
-    // чтобы при обычном копировании (выделением) не переносились артефакты вроде: class="token-keyword">def ...
+    // Удаляет HTML-подсветку кода (Prism/Highlight.js), если модель случайно её вставила.
+    // Это нужно, чтобы при копировании/запуске не появлялись строки вроде: class="token-keyword">def ...
+    function stripHighlightMarkup(text, opts = {}) {
+      const preserveTags = !!opts.preserveTags;
+      let s = String(text || '');
+
+      const hasArtifacts =
+        /(<span\b[^>]*\b(token|hljs)\b|<\/span>|\bclass=("|')token-|\bclass=("|')hljs-|&lt;span\b|&lt;\/span&gt;)/i.test(s);
+      if (!hasArtifacts) {
+        // Также чистим «обрывки» без тега <span: class="token-keyword">def
+        if (/\bclass=("|')token-[^"']*("|')\s*>/i.test(s) || /\bclass=("|')hljs-[^"']*("|')\s*>/i.test(s)) {
+          s = s
+            .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
+            .replace(/\bclass=("|')hljs-[^"']*("|')\s*>/gi, '')
+            .replace(/\bclass=("|')token-[^"']*("|')/gi, '')
+            .replace(/\bclass=("|')hljs-[^"']*("|')/gi, '');
+          return s;
+        }
+        return s;
+      }
+
+      // Decode minimal entities to clean tags
+      s = s
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&amp;/gi, '&');
+
+      // Remove highlight spans and pre/code wrappers
+      s = s
+        .replace(/<span\b[^>]*\b(token|hljs)\b[^>]*>/gi, '')
+        .replace(/<\/span>/gi, '')
+        .replace(/<\/?(?:pre|code)\b[^>]*>/gi, '');
+
+      // Remove broken leftovers
+      s = s
+        .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
+        .replace(/\bclass=("|')hljs-[^"']*("|')\s*>/gi, '')
+        .replace(/\bclass=("|')token-[^"']*("|')/gi, '')
+        .replace(/\bclass=("|')hljs-[^"']*("|')/gi, '');
+
+      // Remove any remaining tags for non-markup languages
+      if (!preserveTags) s = s.replace(/<[^>]+>/g, '');
+
+      return s;
+    }
+
+    // Clean code blocks before render, so selection-copy also stays clean
     renderer.code = (code, infostring) => {
-      const cleaned = stripHighlightMarkup(code);
-      const lang = String(infostring || '').trim().split(/\s+/)[0];
+      const lang = String(infostring || '').trim().split(/\s+/)[0].toLowerCase();
+      const isMarkupLang = ['html', 'xml', 'svg', 'xhtml'].includes(lang);
+      const cleaned = stripHighlightMarkup(code, { preserveTags: isMarkupLang });
       const cls = lang ? ` class="language-${escapeHtmlBasic(lang)}"` : '';
       return `<pre><code${cls}>${escapeHtmlBasic(cleaned)}</code></pre>`;
     };
@@ -470,48 +474,8 @@
       }[ch]));
     }
 
-    // Удаляет HTML-подсветку кода (Prism/Highlight.js), если модель случайно её вставила.
-    // Это нужно, чтобы при копировании/запуске не появлялись строки вроде: class="token-keyword">def ...
-    function stripHighlightMarkup(text, opts = {}) {
-      const preserveTags = !!opts.preserveTags;
-      let s = String(text || '');
-
-      // Часто артефакт попадает как «обрывок» без <span, например: class="token-keyword">def ...
-      // или в виде HTML entities (&lt;span ...&gt;).
-      const hasArtifacts =
-        /(<span\b[^>]*\b(token|hljs)\b|<\/span>|\bclass=("|')token-|\bclass=("|')hljs-|&lt;span\b|&lt;\/span&gt;)/i.test(s);
-      if (!hasArtifacts) return s;
-
-      // 1) Если пришли entities — декодируем только базовые, чтобы можно было вычистить теги.
-      s = s
-        .replace(/&lt;/gi, '<')
-        .replace(/&gt;/gi, '>')
-        .replace(/&amp;/gi, '&');
-
-      // 2) Удаляем span'ы подсветки и возможные контейнеры pre/code.
-      s = s
-        .replace(/<span\b[^>]*\b(token|hljs)\b[^>]*>/gi, '')
-        .replace(/<\/span>/gi, '')
-        .replace(/<\/?(?:pre|code)\b[^>]*>/gi, '');
-
-      // 3) Удаляем обрывки вида: class="token-keyword"> (если модель прислала часть тега)
-      s = s
-        .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
-        .replace(/\bclass=("|')hljs-[^"']*("|')\s*>/gi, '')
-        .replace(/\bclass=("|')token-[^"']*("|')/gi, '')
-        .replace(/\bclass=("|')hljs-[^"']*("|')/gi, '');
-
-      // 4) На всякий случай убираем любые оставшиеся HTML-теги.
-      // Если это реальный HTML-код, preserveTags=true сохранит теги.
-      if (!preserveTags) s = s.replace(/<[^>]+>/g, '');
-
-      return s;
-    }
-
-    // Чистит только содержимое fenced code blocks, оставляя обычный текст ответа нетронутым.
     function normalizeAssistantMarkdown(md) {
-      // 1) На верхнем уровне убираем самые опасные «обрывки» подсветки, если они попали вне code fences.
-      // Не удаляем весь HTML тут, чтобы не ломать обычный текст — только явные артефакты token/hljs.
+      // 1) remove obvious highlight artifacts outside fences
       let src = String(md || '');
       src = src
         .replace(/\bclass=("|')token-[^\s>"']*("|')\s*>/gi, '')
@@ -519,7 +483,7 @@
         .replace(/&lt;span\b[^&]*\b(token|hljs)\b[^&]*&gt;/gi, '')
         .replace(/&lt;\/span&gt;/gi, '');
 
-      // 2) Внутри fenced code blocks — чистим максимально.
+      // 2) inside fenced code blocks — clean aggressively
       const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
       src = src.replace(fenceRe, (full, langRaw, code) => {
         const lang = String(langRaw || '').trim().toLowerCase();
@@ -531,7 +495,6 @@
       return src;
     }
 
-    // Нормализация для копирования (из кода / из всего ответа)
     function normalizeForCopy(text) {
       return stripHighlightMarkup(String(text || '')).replace(/\r\n/g, '\n');
     }
@@ -562,10 +525,6 @@
     let loading = false;
     let cooldownUntil = 0;
     let cooldownInterval = null;
-
-    // Если запрос упал из-за авторизации — запоминаем, какой чат и какое user-сообщение нужно повторить после ввода ключа.
-    /** @type {{chatId: string, lastUserTs: number} | null} */
-    let pendingAuthRetry = null;
 
     function cooldownRemainingSec() {
       const ms = cooldownUntil - Date.now();
@@ -671,12 +630,13 @@
     function enhanceRichContent(root) {
       if (!root) return;
 
-      // Defensive: если вдруг в DOM оказались артефакты подсветки — чистим отображаемый код.
-      // Это защищает даже при копировании выделением мышью.
+      // Defensive: clean code blocks in DOM (helps selection copy)
       root.querySelectorAll('pre code').forEach(codeEl => {
         if (codeEl.dataset.cleaned === '1') return;
         const raw = codeEl.textContent || '';
-        const cleaned = stripHighlightMarkup(raw);
+        const cls = (codeEl.getAttribute('class') || '').toLowerCase();
+        const preserveTags = /language-(html|xml|svg|xhtml)\b/.test(cls);
+        const cleaned = stripHighlightMarkup(raw, { preserveTags });
         if (cleaned !== raw) codeEl.textContent = cleaned;
         codeEl.dataset.cleaned = '1';
       });
@@ -818,45 +778,6 @@
     function toggleSidebar() {
       const next = !document.body.classList.contains('sidebar-collapsed');
       setSidebarCollapsed(next);
-    }
-
-    // ====== API key (local only) ======
-    function getSavedApiKey() {
-      try {
-        const k = localStorage.getItem(LS_APIKEY);
-        return (k && String(k).trim()) ? String(k).trim() : '';
-      } catch {
-        return '';
-      }
-    }
-
-    function setSavedApiKey(k) {
-      try {
-        localStorage.setItem(LS_APIKEY, String(k || '').trim());
-      } catch {}
-    }
-
-    function clearSavedApiKey() {
-      try { localStorage.removeItem(LS_APIKEY); } catch {}
-    }
-
-    function openKeyModal(hint = '') {
-      if (!keyModal) return;
-      keyModal.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
-      if (apiKeyInput) apiKeyInput.value = getSavedApiKey() || '';
-      if (keyModalHint) keyModalHint.textContent = hint || '';
-      setTimeout(() => apiKeyInput?.focus(), 50);
-    }
-
-    function closeKeyModal() {
-      if (!keyModal) return;
-      keyModal.classList.add('hidden');
-      document.body.style.overflow = '';
-    }
-
-    function currentApiKey() {
-      return getSavedApiKey() || API_KEY;
     }
 
     // ====== Storage ======
@@ -1082,7 +1003,6 @@
             <span>${formatTime(msg.ts)}</span>
           </span>
         `;
-        // Для копирования используем источник (markdown), а не innerText отрендеренного DOM.
         wrap.dataset.raw = msg.content || '';
       } else {
         meta.innerHTML = `<span>Вы</span><span>${formatTime(msg.ts)}</span>`;
@@ -1155,7 +1075,6 @@
         return j || String(err);
       }
       if (typeof err === 'object') {
-        // Частые формы ошибок в API
         const msg = err.message || err.error?.message || err.error?.error?.message || err.error || err.msg || err.detail;
         if (typeof msg === 'string' && msg.trim()) return msg;
         const j = safeJsonStringify(err);
@@ -1167,7 +1086,6 @@
     function extractApiError(payload) {
       if (!payload) return '';
 
-      // OpenRouter обычно отдаёт { error: { message, code, ... } }
       const err = payload?.error;
       if (typeof err === 'string') return err.trim();
       if (err && typeof err === 'object') {
@@ -1179,13 +1097,11 @@
 
       if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
 
-      // Иногда ошибка приходит в нестандартном виде — выведем JSON целиком
       const fallback = safeJsonStringify(payload);
       return (fallback || '').trim();
     }
 
     function parseRetryAfterSeconds(res, msgText) {
-      // 1) Header Retry-After (seconds)
       try {
         const h = res?.headers?.get?.('retry-after');
         if (h && String(h).trim()) {
@@ -1194,7 +1110,6 @@
         }
       } catch {}
 
-      // 2) Message patterns: "retry in 13.6s" / "retry after 10s"
       const m = String(msgText || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
       if (m) {
         const n = Number(m[1]);
@@ -1212,13 +1127,11 @@
         max_tokens: 900
       };
 
-      const key = currentApiKey();
-
       const res = await fetch(ENDPOINT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${key}`,
+          'Authorization': `Bearer ${API_KEY}`,
           'HTTP-Referer': location.origin,
           'X-Title': 'photonn AI'
         },
@@ -1230,89 +1143,18 @@
         let msg = extractApiError(data);
         if (!msg) msg = `HTTP ${res.status}`;
 
-        // Лимиты/квоты: запускаем кулдаун
         const isRate = (res.status === 429) || /rate limit|too many requests|quota/i.test(msg);
         if (isRate) {
           const retrySec = parseRetryAfterSeconds(res, msg);
           if (retrySec > 0) startCooldown(retrySec);
         }
 
-        // Частые кейсы на проде: ключ недействителен/отозван.
-        const isAuth = (res.status === 401 || res.status === 403) || /user not found/i.test(msg);
-        if (isAuth) {
-          // Пометим, что следующий успешный ввод ключа должен повторить запрос.
-          pendingAuthRetry = { chatId: activeChat?.id || activeChatId || '', lastUserTs: activeChat?.messages?.at?.(-1)?.ts || Date.now() };
-          openKeyModal('Нужен действующий ключ доступа. Вставьте рабочий ключ — и запрос будет повторён.');
-          const err = new Error(msg);
-          err.name = 'AUTH_REQUIRED';
-          throw err;
-        }
-
-        // Пробросим максимум полезной информации
         throw new Error(msg);
       }
 
       const text = data?.choices?.[0]?.message?.content;
       if (!text) throw new Error('Пустой ответ.');
       return String(text);
-    }
-
-    async function retryPendingAuth() {
-      const p = pendingAuthRetry;
-      if (!p || !p.chatId) return;
-
-      const chat = chats.find(c => c.id === p.chatId);
-      if (!chat) { pendingAuthRetry = null; return; }
-
-      // Проверим, что последнее user-сообщение всё ещё то же (чтобы не повторять неактуальное).
-      const lastUser = [...chat.messages].reverse().find(m => m.role === 'user');
-      if (!lastUser || (p.lastUserTs && lastUser.ts !== p.lastUserTs)) {
-        pendingAuthRetry = null;
-        return;
-      }
-
-      // Если уже есть ответ ассистента после этого сообщения — не повторяем.
-      const lastIndex = chat.messages.lastIndexOf(lastUser);
-      const hasAssistantAfter = chat.messages.slice(lastIndex + 1).some(m => m.role === 'assistant');
-      if (hasAssistantAfter) {
-        pendingAuthRetry = null;
-        return;
-      }
-
-      pendingAuthRetry = null;
-      setStatus('');
-      setLoading(true);
-
-      // Переходим в нужный чат
-      activeChatId = chat.id;
-      try { localStorage.setItem(LS_ACTIVE, activeChatId); } catch {}
-      renderChatList();
-      renderActiveChat();
-
-      const typingEl = renderTyping();
-      scrollToBottom();
-
-      try {
-        const reply = await callApi(chat);
-        typingEl?.remove();
-
-        const normalized = normalizeAssistantMarkdown(reply);
-        chat.messages.push({ role: 'assistant', content: normalized, ts: Date.now() });
-        chat.updatedAt = Date.now();
-        saveChats();
-        renderChatList();
-        renderActiveChat();
-
-        setStatus('Ключ принят. Ответ получен.', 'success');
-        setTimeout(() => setStatus(''), 1200);
-      } catch (e) {
-        typingEl?.remove();
-        const rawMsg = toErrorText(e);
-        // Если снова авторизация — модалка уже откроется внутри callApi.
-        setStatus(`Ошибка: ${rawMsg || 'Не удалось выполнить запрос.'}`, 'error');
-      } finally {
-        setLoading(false);
-      }
     }
 
     // ====== Chat actions ======
@@ -1417,9 +1259,8 @@
         chat.messages.push(assistantMsg);
         chat.updatedAt = Date.now();
 
-        // Если модель внезапно прислала HTML-подсветку — предупредим.
         if (/(<span\b[^>]*\b(token|hljs)\b|\bclass=("|')token-)/i.test(reply)) {
-          setStatus('В ответе была HTML-подсветка кода. При копировании используйте кнопку «Копировать» — она очищает код.', 'warn');
+          setStatus('В ответе была HTML-подсветка кода. Используйте кнопку «Копировать» — она очищает код.', 'warn');
           setTimeout(() => setStatus(''), 3000);
         }
 
@@ -1429,22 +1270,11 @@
       } catch (e) {
         typingEl?.remove();
 
-        // Если требуется авторизация — не спамим чат системным сообщением.
-        const authText = toErrorText(e);
-        if (e && (e.name === 'AUTH_REQUIRED' || /user not found/i.test(authText) || /unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(authText))) {
-          // На всякий случай откроем модалку, если она не открыта.
-          openKeyModal('Похоже, ключ недействителен или отключён. Вставьте рабочий ключ — запрос будет повторён.');
-          setStatus('Нужен действующий ключ доступа.', 'error');
-          setLoading(false);
-          return;
-        }
-
         const rawMsg = toErrorText(e);
 
-        // Более дружелюбные сообщения
+        // Friendly error messages
         let msg = rawMsg;
 
-        // Если API подсказал «retry in ...s» / «retry after ...» — вытащим время.
         const retryMatch = String(rawMsg || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
         const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
         if (Number.isFinite(retrySeconds) && retrySeconds > 0) startCooldown(retrySeconds);
@@ -1452,7 +1282,7 @@
         if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
           msg = 'Не удалось авторизоваться (ключ недействителен, отключён или лимитирован).';
         } else if (/unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(rawMsg)) {
-          msg = 'Доступ запрещён. Проверьте ключ доступа.';
+          msg = 'Доступ запрещён. Ключ недействителен или отключён.';
         } else if (/rate limit|too many requests|429|quota/i.test(rawMsg)) {
           msg = 'Слишком много запросов или превышены лимиты. Подождите немного и попробуйте снова.';
           if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
@@ -1466,7 +1296,6 @@
 
         setStatus(`Ошибка: ${msg}`, 'error');
 
-        // Внутрь чата кладём и понятное сообщение, и тех. детали (в код-блоке)
         let details = String(rawMsg || msg || '').trim();
         if (details.length > 1500) details = details.slice(0, 1500).trimEnd() + '\n…';
         chat.messages.push({
@@ -1516,40 +1345,17 @@
     btnToggleSidebar?.addEventListener('click', toggleSidebar);
     btnCollapseSidebar?.addEventListener('click', () => setSidebarCollapsed(true));
 
-    // Key modal events
-    btnCloseKeyModal?.addEventListener('click', closeKeyModal);
-    keyModalOverlay?.addEventListener('click', closeKeyModal);
-    btnSaveKey?.addEventListener('click', async () => {
-      const next = String(apiKeyInput?.value || '').trim();
-      if (!next) {
-        if (keyModalHint) keyModalHint.textContent = 'Введите ключ.';
-        return;
-      }
-      setSavedApiKey(next);
-      closeKeyModal();
-      setStatus('Ключ сохранён. Выполняю запрос…', 'success');
-      setTimeout(() => setStatus(''), 1200);
-      await retryPendingAuth();
-    });
-    btnClearSavedKey?.addEventListener('click', () => {
-      clearSavedApiKey();
-      if (apiKeyInput) apiKeyInput.value = '';
-      if (keyModalHint) keyModalHint.textContent = 'Сохранённый ключ удалён.';
-    });
-
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeDrawer(true);
-        closeKeyModal();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
-        // Ctrl/Cmd+B — toggle sidebar
         e.preventDefault();
         toggleSidebar();
       }
     });
 
-    // Если пользователь копирует выделением из блока кода — принудительно копируем очищенный plain-text.
+    // If user copies selection from code block, force plain-text cleaned
     document.addEventListener('copy', (e) => {
       try {
         const sel = window.getSelection?.();
@@ -1560,10 +1366,14 @@
         if (!pre) return;
 
         const code = pre.querySelector('code');
+        const cls = (code?.getAttribute('class') || '').toLowerCase();
+        const preserveTags = /language-(html|xml|svg|xhtml)\b/.test(cls);
+
         const text = (code?.textContent || pre.textContent || '').trimEnd();
-        const cleaned = normalizeForCopy(stripHighlightMarkup(text));
+        const cleaned = stripHighlightMarkup(text, { preserveTags });
+
         if (e.clipboardData) {
-          e.clipboardData.setData('text/plain', cleaned);
+          e.clipboardData.setData('text/plain', normalizeForCopy(cleaned));
           e.preventDefault();
         }
       } catch {}
