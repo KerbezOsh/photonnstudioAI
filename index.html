@@ -316,10 +316,10 @@
 
   <script>
     // ====== API config ======
-    // ВАЖНО: ключ в фронтенде нельзя защитить (его видно в исходнике сайта).
-    const API_KEY = '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';
+    // На проде ключ нельзя хранить во фронтенде (его сразу «сожгут»). Поэтому запрос идёт через /api/chat.
+    // Настройка: в Vercel добавьте переменную окружения OPENROUTER_API_KEY со своим ключом.
     const MODEL = 'xiaomi/mimo-v2-flash:free';
-    const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+    const ENDPOINT = '/api/chat';
 
     const SYSTEM_PROMPT = [
       'Ты — полезный AI‑ассистент.',
@@ -1092,13 +1092,16 @@
         const em = err?.message;
         if (typeof em === 'string' && em.trim()) return em.trim();
         const j = safeJsonStringify(err);
-        if (j) return j;
+        if (j && j.trim() !== '{}' && j.trim() !== 'null') return j;
       }
 
       if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
 
+      // Some gateways respond with {} on errors
       const fallback = safeJsonStringify(payload);
-      return (fallback || '').trim();
+      const fb = (fallback || '').trim();
+      if (fb === '{}' || fb === 'null') return '';
+      return fb;
     }
 
     function parseRetryAfterSeconds(res, msgText) {
@@ -1129,11 +1132,9 @@
 
       const res = await fetch(ENDPOINT, {
         method: 'POST',
+        cache: 'no-store',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${API_KEY}`,
-          'HTTP-Referer': location.origin,
-          'X-Title': 'photonn AI'
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(body)
       });
@@ -1141,7 +1142,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         let msg = extractApiError(data);
-        if (!msg) msg = `HTTP ${res.status}`;
+        if (!msg) msg = `HTTP ${res.status} (empty error payload)`;
 
         const isRate = (res.status === 429) || /rate limit|too many requests|quota/i.test(msg);
         if (isRate) {
@@ -1279,7 +1280,9 @@
         const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
         if (Number.isFinite(retrySeconds) && retrySeconds > 0) startCooldown(retrySeconds);
 
-        if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
+        if (/server is not configured|openrouter_api_key/i.test(rawMsg)) {
+          msg = 'Сервер не настроен: задайте переменную окружения OPENROUTER_API_KEY в настройках проекта (Vercel) и сделайте redeploy.';
+        } else if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
           msg = 'Не удалось авторизоваться (ключ недействителен, отключён или лимитирован).';
         } else if (/unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(rawMsg)) {
           msg = 'Доступ запрещён. Ключ недействителен или отключён.';
