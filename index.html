@@ -559,10 +559,59 @@
       }
     }
 
+    let loading = false;
+    let cooldownUntil = 0;
+    let cooldownInterval = null;
+
+    // Если запрос упал из-за авторизации — запоминаем, какой чат и какое user-сообщение нужно повторить после ввода ключа.
+    /** @type {{chatId: string, lastUserTs: number} | null} */
+    let pendingAuthRetry = null;
+
+    function cooldownRemainingSec() {
+      const ms = cooldownUntil - Date.now();
+      return ms > 0 ? Math.ceil(ms / 1000) : 0;
+    }
+
+    function updateSendState() {
+      const cd = cooldownRemainingSec();
+      const disabled = loading || cd > 0;
+      btnSend.disabled = disabled;
+      spinner.classList.toggle('hidden', !loading);
+      sendIcon.classList.toggle('hidden', loading);
+
+      if (cd > 0) {
+        btnSend.title = `Подождите ${cd} сек.`;
+        btnSend.setAttribute('aria-label', `Подождите ${cd} сек.`);
+      } else {
+        btnSend.title = 'Отправить';
+        btnSend.setAttribute('aria-label', 'Отправить');
+      }
+    }
+
     function setLoading(isLoading) {
-      btnSend.disabled = isLoading;
-      spinner.classList.toggle('hidden', !isLoading);
-      sendIcon.classList.toggle('hidden', isLoading);
+      loading = !!isLoading;
+      updateSendState();
+    }
+
+    function startCooldown(seconds) {
+      const s = Math.ceil(Number(seconds) || 0);
+      if (!Number.isFinite(s) || s <= 0) return;
+
+      cooldownUntil = Math.max(cooldownUntil, Date.now() + s * 1000);
+
+      if (cooldownInterval) clearInterval(cooldownInterval);
+      cooldownInterval = setInterval(() => {
+        if (cooldownRemainingSec() <= 0) {
+          clearInterval(cooldownInterval);
+          cooldownInterval = null;
+          cooldownUntil = 0;
+          updateSendState();
+        } else {
+          updateSendState();
+        }
+      }, 250);
+
+      updateSendState();
     }
 
     function scrollToBottom() {
@@ -1086,9 +1135,72 @@
       return [sys, ...tail].map(m => ({ role: m.role, content: m.content }));
     }
 
+    function safeJsonStringify(value, maxLen = 1600) {
+      try {
+        const s = JSON.stringify(value, null, 2);
+        if (!s) return '';
+        return (s.length > maxLen) ? (s.slice(0, maxLen).trimEnd() + '\n…') : s;
+      } catch {
+        return '';
+      }
+    }
+
+    function toErrorText(err) {
+      if (err == null) return '';
+      if (typeof err === 'string') return err;
+      if (err instanceof Error) {
+        const m = err.message;
+        if (typeof m === 'string' && m.trim()) return m;
+        const j = safeJsonStringify({ name: err.name, message: err.message, stack: err.stack });
+        return j || String(err);
+      }
+      if (typeof err === 'object') {
+        // Частые формы ошибок в API
+        const msg = err.message || err.error?.message || err.error?.error?.message || err.error || err.msg || err.detail;
+        if (typeof msg === 'string' && msg.trim()) return msg;
+        const j = safeJsonStringify(err);
+        return j || Object.prototype.toString.call(err);
+      }
+      return String(err);
+    }
+
     function extractApiError(payload) {
-      const msg = payload?.error?.message || payload?.message || payload?.error || '';
-      return String(msg || '').trim();
+      if (!payload) return '';
+
+      // OpenRouter обычно отдаёт { error: { message, code, ... } }
+      const err = payload?.error;
+      if (typeof err === 'string') return err.trim();
+      if (err && typeof err === 'object') {
+        const em = err?.message;
+        if (typeof em === 'string' && em.trim()) return em.trim();
+        const j = safeJsonStringify(err);
+        if (j) return j;
+      }
+
+      if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
+
+      // Иногда ошибка приходит в нестандартном виде — выведем JSON целиком
+      const fallback = safeJsonStringify(payload);
+      return (fallback || '').trim();
+    }
+
+    function parseRetryAfterSeconds(res, msgText) {
+      // 1) Header Retry-After (seconds)
+      try {
+        const h = res?.headers?.get?.('retry-after');
+        if (h && String(h).trim()) {
+          const n = Number(String(h).trim());
+          if (Number.isFinite(n) && n > 0) return n;
+        }
+      } catch {}
+
+      // 2) Message patterns: "retry in 13.6s" / "retry after 10s"
+      const m = String(msgText || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return 0;
     }
 
     async function callApi(activeChat) {
@@ -1115,20 +1227,92 @@
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const msg = extractApiError(data) || `HTTP ${res.status}`;
+        let msg = extractApiError(data);
+        if (!msg) msg = `HTTP ${res.status}`;
 
-        // Частые кейсы на проде (Vercel): ключ недействителен/отозван/лимиты/аккаунт.
-        const isAuth = (res.status === 401 || res.status === 403) || /user not found/i.test(msg);
-        if (isAuth) {
-          openKeyModal('Похоже, текущий ключ недействителен или отключён. Вставьте рабочий ключ и повторите.');
+        // Лимиты/квоты: запускаем кулдаун
+        const isRate = (res.status === 429) || /rate limit|too many requests|quota/i.test(msg);
+        if (isRate) {
+          const retrySec = parseRetryAfterSeconds(res, msg);
+          if (retrySec > 0) startCooldown(retrySec);
         }
 
+        // Частые кейсы на проде: ключ недействителен/отозван.
+        const isAuth = (res.status === 401 || res.status === 403) || /user not found/i.test(msg);
+        if (isAuth) {
+          // Пометим, что следующий успешный ввод ключа должен повторить запрос.
+          pendingAuthRetry = { chatId: activeChat?.id || activeChatId || '', lastUserTs: activeChat?.messages?.at?.(-1)?.ts || Date.now() };
+          openKeyModal('Нужен действующий ключ доступа. Вставьте рабочий ключ — и запрос будет повторён.');
+          const err = new Error(msg);
+          err.name = 'AUTH_REQUIRED';
+          throw err;
+        }
+
+        // Пробросим максимум полезной информации
         throw new Error(msg);
       }
 
       const text = data?.choices?.[0]?.message?.content;
       if (!text) throw new Error('Пустой ответ.');
       return String(text);
+    }
+
+    async function retryPendingAuth() {
+      const p = pendingAuthRetry;
+      if (!p || !p.chatId) return;
+
+      const chat = chats.find(c => c.id === p.chatId);
+      if (!chat) { pendingAuthRetry = null; return; }
+
+      // Проверим, что последнее user-сообщение всё ещё то же (чтобы не повторять неактуальное).
+      const lastUser = [...chat.messages].reverse().find(m => m.role === 'user');
+      if (!lastUser || (p.lastUserTs && lastUser.ts !== p.lastUserTs)) {
+        pendingAuthRetry = null;
+        return;
+      }
+
+      // Если уже есть ответ ассистента после этого сообщения — не повторяем.
+      const lastIndex = chat.messages.lastIndexOf(lastUser);
+      const hasAssistantAfter = chat.messages.slice(lastIndex + 1).some(m => m.role === 'assistant');
+      if (hasAssistantAfter) {
+        pendingAuthRetry = null;
+        return;
+      }
+
+      pendingAuthRetry = null;
+      setStatus('');
+      setLoading(true);
+
+      // Переходим в нужный чат
+      activeChatId = chat.id;
+      try { localStorage.setItem(LS_ACTIVE, activeChatId); } catch {}
+      renderChatList();
+      renderActiveChat();
+
+      const typingEl = renderTyping();
+      scrollToBottom();
+
+      try {
+        const reply = await callApi(chat);
+        typingEl?.remove();
+
+        const normalized = normalizeAssistantMarkdown(reply);
+        chat.messages.push({ role: 'assistant', content: normalized, ts: Date.now() });
+        chat.updatedAt = Date.now();
+        saveChats();
+        renderChatList();
+        renderActiveChat();
+
+        setStatus('Ключ принят. Ответ получен.', 'success');
+        setTimeout(() => setStatus(''), 1200);
+      } catch (e) {
+        typingEl?.remove();
+        const rawMsg = toErrorText(e);
+        // Если снова авторизация — модалка уже откроется внутри callApi.
+        setStatus(`Ошибка: ${rawMsg || 'Не удалось выполнить запрос.'}`, 'error');
+      } finally {
+        setLoading(false);
+      }
     }
 
     // ====== Chat actions ======
@@ -1173,6 +1357,12 @@
 
     // ====== Send ======
     async function send() {
+      const cd = cooldownRemainingSec();
+      if (cd > 0) {
+        setStatus(`Подождите ${cd} сек. и попробуйте снова.`, 'warn');
+        return;
+      }
+
       const text = (elPrompt.value || '').trim();
       if (!text) {
         setStatus('Введите сообщение.', 'warn');
@@ -1238,27 +1428,54 @@
         renderActiveChat();
       } catch (e) {
         typingEl?.remove();
-        const rawMsg = e?.message ? String(e.message) : String(e);
+
+        // Если требуется авторизация — не спамим чат системным сообщением.
+        const authText = toErrorText(e);
+        if (e && (e.name === 'AUTH_REQUIRED' || /user not found/i.test(authText) || /unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(authText))) {
+          // На всякий случай откроем модалку, если она не открыта.
+          openKeyModal('Похоже, ключ недействителен или отключён. Вставьте рабочий ключ — запрос будет повторён.');
+          setStatus('Нужен действующий ключ доступа.', 'error');
+          setLoading(false);
+          return;
+        }
+
+        const rawMsg = toErrorText(e);
 
         // Более дружелюбные сообщения
         let msg = rawMsg;
-        if (/user not found/i.test(rawMsg)) {
-          msg = 'Не удалось авторизоваться (ключ недействителен или отключён).';
-        } else if (/unauthorized|forbidden/i.test(rawMsg)) {
+
+        // Если API подсказал «retry in ...s» / «retry after ...» — вытащим время.
+        const retryMatch = String(rawMsg || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
+        const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
+        if (Number.isFinite(retrySeconds) && retrySeconds > 0) startCooldown(retrySeconds);
+
+        if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
+          msg = 'Не удалось авторизоваться (ключ недействителен, отключён или лимитирован).';
+        } else if (/unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(rawMsg)) {
           msg = 'Доступ запрещён. Проверьте ключ доступа.';
-        } else if (/rate limit|too many requests|429/i.test(rawMsg)) {
-          msg = 'Слишком много запросов. Подождите немного и попробуйте снова.';
+        } else if (/rate limit|too many requests|429|quota/i.test(rawMsg)) {
+          msg = 'Слишком много запросов или превышены лимиты. Подождите немного и попробуйте снова.';
+          if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+            msg += ` (можно повторить примерно через ${Math.ceil(retrySeconds)} сек.)`;
+          }
+        } else if (/timeout|networkerror|failed to fetch/i.test(rawMsg)) {
+          msg = 'Проблема с сетью или доступом к серверу. Проверьте интернет и попробуйте ещё раз.';
+        } else if (!String(msg || '').trim()) {
+          msg = 'Неизвестная ошибка.';
         }
 
         setStatus(`Ошибка: ${msg}`, 'error');
 
+        // Внутрь чата кладём и понятное сообщение, и тех. детали (в код-блоке)
+        let details = String(rawMsg || msg || '').trim();
+        if (details.length > 1500) details = details.slice(0, 1500).trimEnd() + '\n…';
         chat.messages.push({
           role: 'assistant',
           ts: Date.now(),
           content:
             '**Не удалось получить ответ.**\n\n' +
             'Попробуйте ещё раз чуть позже или переформулируйте запрос.\n\n' +
-            '```\n' + msg + '\n```'
+            '```\n' + details + '\n```'
         });
         chat.updatedAt = Date.now();
         saveChats();
@@ -1302,7 +1519,7 @@
     // Key modal events
     btnCloseKeyModal?.addEventListener('click', closeKeyModal);
     keyModalOverlay?.addEventListener('click', closeKeyModal);
-    btnSaveKey?.addEventListener('click', () => {
+    btnSaveKey?.addEventListener('click', async () => {
       const next = String(apiKeyInput?.value || '').trim();
       if (!next) {
         if (keyModalHint) keyModalHint.textContent = 'Введите ключ.';
@@ -1310,8 +1527,9 @@
       }
       setSavedApiKey(next);
       closeKeyModal();
-      setStatus('Ключ сохранён в браузере. Повторите запрос.', 'success');
-      setTimeout(() => setStatus(''), 1400);
+      setStatus('Ключ сохранён. Выполняю запрос…', 'success');
+      setTimeout(() => setStatus(''), 1200);
+      await retryPendingAuth();
     });
     btnClearSavedKey?.addEventListener('click', () => {
       clearSavedApiKey();
@@ -1320,7 +1538,10 @@
     });
 
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeDrawer(true);
+      if (e.key === 'Escape') {
+        closeDrawer(true);
+        closeKeyModal();
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
         // Ctrl/Cmd+B — toggle sidebar
         e.preventDefault();
@@ -1361,6 +1582,7 @@
 
     elPrompt.value = '';
     autoGrowTextarea();
+    updateSendState();
     elPrompt.focus();
   </script>
 </body>
