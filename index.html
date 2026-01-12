@@ -323,7 +323,9 @@
     // Try multiple endpoint variants (root + basePath + trailing slash)
     // This fixes cases when the site is served from a subfolder or without a trailing slash.
     function getBasePath() {
-      const p = String(location.pathname || '/');
+      let p = String(location.pathname || '/');
+      if (!p) p = '/';
+      if (!p.startsWith('/')) p = '/' + p;
       if (p.endsWith('/')) return p;
       // If URL looks like a file (/path/index.html) => strip file
       if (/\.[a-z0-9]+$/i.test(p)) return p.replace(/\/[^\/]*$/, '/');
@@ -331,17 +333,44 @@
       return p + '/';
     }
 
+    function normalizeEndpointPath(s) {
+      let v = String(s || '').trim();
+      if (!v) return '';
+      // Never allow './api/..' to leak into requests
+      if (v.startsWith('./')) v = v.slice(1);
+      if (!v.startsWith('/')) v = '/' + v;
+      // Collapse accidental double slashes (except protocol, which we don't use here)
+      v = v.replace(/\/\/+/g, '/');
+      return v;
+    }
+
     function getEndpointCandidates() {
       const basePath = getBasePath();
+      // Важно: относительные пути вроде ./api/chat могут превращаться в /<basePath>/api/chat
+      // и давать 404 даже когда функция существует в корне домена.
+      // Поэтому используем только абсолютный путь и вариант с basePath.
       const list = [
         '/api/chat',
         '/api/chat/',
         basePath + 'api/chat',
-        basePath + 'api/chat/',
-        'api/chat',
-        './api/chat'
+        basePath + 'api/chat/'
       ];
-      return Array.from(new Set(list.map(s => String(s || '').trim()).filter(Boolean)));
+      const normalized = list.map(normalizeEndpointPath).filter(Boolean);
+      return Array.from(new Set(normalized));
+    }
+
+    async function checkApiAvailable() {
+      // Quick health-check to surface deployment issues early
+      const candidates = getEndpointCandidates();
+      for (const url of candidates) {
+        try {
+          const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+          if (res.ok) return true;
+          // If route exists but doesn't allow GET, it's still a good sign
+          if (res.status === 405) return true;
+        } catch {}
+      }
+      return false;
     }
 
     const SYSTEM_PROMPT = [
@@ -444,8 +473,6 @@
       }[ch]));
     }
 
-    // Удаляет HTML-подсветку кода (Prism/Highlight.js), если модель случайно её вставила.
-    // Это нужно, чтобы при копировании/запуске не появлялись строки вроде: class="token-keyword">def ...
     function stripHighlightMarkup(text, opts = {}) {
       const preserveTags = !!opts.preserveTags;
       let s = String(text || '');
@@ -453,7 +480,6 @@
       const hasArtifacts =
         /(<span\b[^>]*\b(token|hljs)\b|<\/span>|\bclass=("|')token-|\bclass=("|')hljs-|&lt;span\b|&lt;\/span&gt;)/i.test(s);
       if (!hasArtifacts) {
-        // Также чистим «обрывки» без тега <span: class="token-keyword">def
         if (/\bclass=("|')token-[^"']*("|')\s*>/i.test(s) || /\bclass=("|')hljs-[^"']*("|')\s*>/i.test(s)) {
           s = s
             .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
@@ -465,32 +491,26 @@
         return s;
       }
 
-      // Decode minimal entities to clean tags
       s = s
         .replace(/&lt;/gi, '<')
         .replace(/&gt;/gi, '>')
         .replace(/&amp;/gi, '&');
 
-      // Remove highlight spans and pre/code wrappers
       s = s
         .replace(/<span\b[^>]*\b(token|hljs)\b[^>]*>/gi, '')
         .replace(/<\/span>/gi, '')
         .replace(/<\/?(?:pre|code)\b[^>]*>/gi, '');
 
-      // Remove broken leftovers
       s = s
         .replace(/\bclass=("|')token-[^"']*("|')\s*>/gi, '')
         .replace(/\bclass=("|')hljs-[^"']*("|')\s*>/gi, '')
         .replace(/\bclass=("|')token-[^"']*("|')/gi, '')
         .replace(/\bclass=("|')hljs-[^"']*("|')/gi, '');
 
-      // Remove any remaining tags for non-markup languages
       if (!preserveTags) s = s.replace(/<[^>]+>/g, '');
-
       return s;
     }
 
-    // Clean code blocks before render, so selection-copy also stays clean
     renderer.code = (code, infostring) => {
       const lang = String(infostring || '').trim().split(/\s+/)[0].toLowerCase();
       const isMarkupLang = ['html', 'xml', 'svg', 'xhtml'].includes(lang);
@@ -504,23 +524,13 @@
       return `<code>${escapeHtmlBasic(cleaned)}</code>`;
     };
 
-    marked.setOptions({
-      gfm: true,
-      breaks: true,
-      headerIds: false,
-      mangle: false,
-      renderer
-    });
+    marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false, renderer });
 
-    // ====== State ======
     const CREATOR_REPLY = 'Мой создатель это photonn-studio.';
 
-    /** @type {{id: string, title: string, createdAt: number, updatedAt: number, messages: {role:'user'|'assistant', content: string, ts: number}[]}[]} */
     let chats = [];
-    /** @type {string|null} */
     let activeChatId = null;
 
-    // ====== Helpers ======
     function uid() {
       return 'c_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(16);
     }
@@ -543,7 +553,6 @@
     }
 
     function normalizeAssistantMarkdown(md) {
-      // 1) remove obvious highlight artifacts outside fences
       let src = String(md || '');
       src = src
         .replace(/\bclass=("|')token-[^\s>"']*("|')\s*>/gi, '')
@@ -551,7 +560,6 @@
         .replace(/&lt;span\b[^&]*\b(token|hljs)\b[^&]*&gt;/gi, '')
         .replace(/&lt;\/span&gt;/gi, '');
 
-      // 2) inside fenced code blocks — clean aggressively
       const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
       src = src.replace(fenceRe, (full, langRaw, code) => {
         const lang = String(langRaw || '').trim().toLowerCase();
@@ -698,7 +706,6 @@
     function enhanceRichContent(root) {
       if (!root) return;
 
-      // Defensive: clean code blocks in DOM (helps selection copy)
       root.querySelectorAll('pre code').forEach(codeEl => {
         if (codeEl.dataset.cleaned === '1') return;
         const raw = codeEl.textContent || '';
@@ -709,7 +716,6 @@
         codeEl.dataset.cleaned = '1';
       });
 
-      // Copy buttons for code blocks
       root.querySelectorAll('pre').forEach(pre => {
         if (pre.dataset.enhanced === '1') return;
         pre.dataset.enhanced = '1';
@@ -733,7 +739,6 @@
         pre.appendChild(btn);
       });
 
-      // Copy buttons for tables (copy as TSV for Excel)
       root.querySelectorAll('table').forEach(table => {
         if (table.dataset.enhanced === '1') return;
         table.dataset.enhanced = '1';
@@ -776,7 +781,6 @@
         wrapper.appendChild(scroller);
       });
 
-      // Copy whole assistant message
       const msgRoot = root.closest('[data-msg-role="assistant"]');
       if (msgRoot && msgRoot.dataset.copyReady !== '1') {
         msgRoot.dataset.copyReady = '1';
@@ -848,7 +852,6 @@
       setSidebarCollapsed(next);
     }
 
-    // ====== Storage ======
     function loadChats() {
       const raw = lsGet(LS_CHATS);
       if (!raw) return [];
@@ -875,15 +878,11 @@
     }
 
     function saveChats() {
-      // keep last 50 chats, each last 120 messages
       const trimmed = chats
         .slice()
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 50)
-        .map(c => ({
-          ...c,
-          messages: c.messages.slice(-120)
-        }));
+        .map(c => ({ ...c, messages: c.messages.slice(-120) }));
 
       lsSet(LS_CHATS, JSON.stringify(trimmed));
       if (activeChatId) lsSet(LS_ACTIVE, activeChatId);
@@ -900,11 +899,7 @@
         title: 'Новый чат',
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        messages: [{
-          role: 'assistant',
-          content: 'Привет! Чем могу помочь?',
-          ts: Date.now()
-        }]
+        messages: [{ role: 'assistant', content: 'Привет! Чем могу помочь?', ts: Date.now() }]
       };
       chats = [c];
       activeChatId = c.id;
@@ -920,11 +915,8 @@
       }
     }
 
-    // ====== Rendering ======
     function renderChatList() {
-      const items = chats
-        .slice()
-        .sort((a, b) => b.updatedAt - a.updatedAt);
+      const items = chats.slice().sort((a, b) => b.updatedAt - a.updatedAt);
 
       const makeItem = (chat) => {
         const isActive = chat.id === activeChatId;
@@ -988,7 +980,6 @@
             return;
           }
 
-          // select chat
           activeChatId = chat.id;
           lsSet(LS_ACTIVE, activeChatId);
           renderChatList();
@@ -1115,7 +1106,6 @@
       scrollToBottom();
     }
 
-    // ====== API ======
     function buildMessagesForApi(activeChat) {
       const maxTurns = 32;
       const sys = { role: 'system', content: SYSTEM_PROMPT };
@@ -1165,7 +1155,6 @@
 
       if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
 
-      // Some gateways respond with {} on errors
       const fallback = safeJsonStringify(payload);
       const fb = (fallback || '').trim();
       if (fb === '{}' || fb === 'null') return '';
@@ -1206,9 +1195,7 @@
           const res = await fetch(url, {
             method: 'POST',
             cache: 'no-store',
-            headers: {
-              'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
           });
 
@@ -1224,7 +1211,6 @@
           if (!res.ok) {
             let msg = extractApiError(data);
 
-            // Better diagnostics for deployment issues
             if (res.status === 405) {
               msg = msg || 'HTTP 405: метод не разрешён для API.';
               msg += ` Путь: ${url}`;
@@ -1243,7 +1229,6 @@
               if (retrySec > 0) startCooldown(retrySec);
             }
 
-            // Try next endpoint (useful for basePath deployments)
             lastErr = new Error(msg);
             continue;
           }
@@ -1260,7 +1245,6 @@
       throw lastErr || new Error('Не удалось вызвать API.');
     }
 
-    // ====== Chat actions ======
     function makeTitleFromText(text) {
       const t = String(text || '').replace(/\s+/g, ' ').trim();
       if (!t) return 'Чат';
@@ -1300,7 +1284,6 @@
       setTimeout(() => setStatus(''), 900);
     }
 
-    // ====== Send ======
     async function send() {
       const cd = cooldownRemainingSec();
       if (cd > 0) {
@@ -1327,7 +1310,6 @@
       chat.messages.push(userMsg);
       chat.updatedAt = Date.now();
 
-      // Auto-title on first user message
       const hasUserBefore = chat.messages.filter(m => m.role === 'user').length > 1;
       if (!hasUserBefore && (chat.title === 'Новый чат' || chat.title === 'Чат')) {
         chat.title = makeTitleFromText(text);
@@ -1338,7 +1320,6 @@
       renderChatList();
       renderActiveChat();
 
-      // Hard rule: creator question -> fixed reply (no API call)
       if (isCreatorQuestion(text)) {
         const assistantMsg = { role: 'assistant', content: CREATOR_REPLY, ts: Date.now() };
         chat.messages.push(assistantMsg);
@@ -1362,11 +1343,6 @@
         chat.messages.push(assistantMsg);
         chat.updatedAt = Date.now();
 
-        if (/(<span\b[^>]*\b(token|hljs)\b|\bclass=("|')token-)/i.test(reply)) {
-          setStatus('В ответе была HTML-подсветка кода. Используйте кнопку «Копировать» — она очищает код.', 'warn');
-          setTimeout(() => setStatus(''), 3000);
-        }
-
         saveChats();
         renderChatList();
         renderActiveChat();
@@ -1374,36 +1350,9 @@
         typingEl?.remove();
 
         const rawMsg = toErrorText(e);
+        setStatus(`Ошибка: ${rawMsg}`, 'error');
 
-        // Friendly error messages
-        let msg = rawMsg;
-
-        const retryMatch = String(rawMsg || '').match(/retry\s*(?:in|after)\s*([0-9]+(?:\.[0-9]+)?)\s*s/i);
-        const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
-        if (Number.isFinite(retrySeconds) && retrySeconds > 0) startCooldown(retrySeconds);
-
-        if (/http\s*405/i.test(rawMsg)) {
-          msg = 'Серверный API-роут недоступен (HTTP 405). Обычно это значит, что /api/chat не задеплоен как serverless-функция или хостинг не поддерживает API routes.';
-        } else if (/server is not configured|openrouter_api_key/i.test(rawMsg)) {
-          msg = 'Сервер не настроен: задайте переменную окружения OPENROUTER_API_KEY в настройках проекта (Vercel) и сделайте redeploy.';
-        } else if (/user not found/i.test(rawMsg) || /no such user/i.test(rawMsg)) {
-          msg = 'Не удалось авторизоваться (ключ недействителен, отключён или лимитирован).';
-        } else if (/unauthorized|forbidden|invalid api key|invalid key|invalid bearer/i.test(rawMsg)) {
-          msg = 'Доступ запрещён. Ключ недействителен или отключён.';
-        } else if (/rate limit|too many requests|429|quota/i.test(rawMsg)) {
-          msg = 'Слишком много запросов или превышены лимиты. Подождите немного и попробуйте снова.';
-          if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
-            msg += ` (можно повторить примерно через ${Math.ceil(retrySeconds)} сек.)`;
-          }
-        } else if (/timeout|networkerror|failed to fetch/i.test(rawMsg)) {
-          msg = 'Проблема с сетью или доступом к серверу. Проверьте интернет и попробуйте ещё раз.';
-        } else if (!String(msg || '').trim()) {
-          msg = 'Неизвестная ошибка.';
-        }
-
-        setStatus(`Ошибка: ${msg}`, 'error');
-
-        let details = String(rawMsg || msg || '').trim();
+        let details = String(rawMsg || '').trim();
         if (details.length > 1500) details = details.slice(0, 1500).trimEnd() + '\n…';
         chat.messages.push({
           role: 'assistant',
@@ -1422,11 +1371,9 @@
       }
     }
 
-    // ====== Events ======
     btnSend.addEventListener('click', send);
     elPrompt.addEventListener('input', autoGrowTextarea);
 
-    // Enter = send, Shift+Enter = newline
     elPrompt.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -1462,7 +1409,6 @@
       }
     });
 
-    // If user copies selection from code block, force plain-text cleaned
     document.addEventListener('copy', (e) => {
       try {
         const sel = window.getSelection?.();
@@ -1486,13 +1432,25 @@
       } catch {}
     });
 
-    // ====== Init ======
     const hasStorage = checkStorageAvailable();
     if (!hasStorage) {
-      // Не навязываем попапы — просто мягко предупреждаем.
       setStatus('В браузере ограничен доступ к хранилищу (Tracking Prevention/Private Mode). История чатов может не сохраниться после перезагрузки.', 'warn');
       setTimeout(() => setStatus(''), 5500);
     }
+
+    (async () => {
+      const candidates = getEndpointCandidates();
+      const ok = await checkApiAvailable();
+      if (!ok) {
+        setStatus(
+          'API не найден. Проверьте деплой serverless‑функции /api/chat. ' +
+          'Откройте в браузере /api/chat — должно вернуть {"ok":true}. ' +
+          'Пробуемые пути: ' + candidates.join(', '),
+          'error'
+        );
+        setTimeout(() => setStatus(''), 11000);
+      }
+    })();
 
     chats = loadChats();
     ensureAtLeastOneChat();
@@ -1500,7 +1458,6 @@
     renderChatList();
     renderActiveChat();
 
-    // Sidebar collapsed state
     const collapsed = (lsGet(LS_SIDEBAR) === '1');
     setSidebarCollapsed(collapsed);
 
